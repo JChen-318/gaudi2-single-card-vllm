@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+#include "gc_interface.h"
+#include "tpc_kernel_lib_interface.h"
+
+class DeepseekV41ControlGemvRrmsGaudi2 {
+    int unpack_;
+public:
+    explicit DeepseekV41ControlGemvRrmsGaudi2(int unpack = 0) : unpack_(unpack) {}
+    static constexpr const char* name =
+        "custom_deepseek_v41_control_gemv_rrms_bf16_gaudi2";
+    tpc_lib_api::GlueCodeReturn GetGcDefinitions(
+        tpc_lib_api::HabanaKernelParams*,
+        tpc_lib_api::HabanaKernelInstantiation*);
+};

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: Apache-2.0
+
+###############################################################################
+# Copyright (C) 2024 Habana Labs, Ltd. an Intel Company
+###############################################################################
+
+from dataclasses import dataclass
+from typing import Optional
+
+import torch
+from vllm_gaudi.extension import cache_ops, ops
+from vllm.v1.attention.backend import AttentionMetadataBuilder
+
+# Should be the same as PARTITION_SIZE in `paged_attention_v2_launcher`.
+_PARTITION_SIZE = 512
+
+
+@dataclass
+class HPUPagedAttentionMetadata:
+    """Metadata for PagedAttention."""
+    block_list: Optional[torch.Tensor]
+    block_mapping: Optional[torch.Tensor]
+    block_usage: Optional[torch.Tensor]
+    block_groups: Optional[torch.Tensor]
+    alibi_blocks: Optional[torch.Tensor]
+
+
+@dataclass
+class HPUPagedAttentionMetadataBuilder(AttentionMetadataBuilder):
+
+    def __init__(self, input_builder: "HPUPageAttentionInputBuilderBase") -> None:
+        """Create the builder, remember some configuration and parameters."""
+        self.input_builder = input_builder
+
+    def prepare(self) -> None:
+        """Prepare for one batch."""
+        pass
+
+    def build(self, seq_lens: list[int], query_lens: list[int], cuda_graph_pad_size: int,
+              batch_size: int) -> type[HPUPagedAttentionMetadata]:
+        """Build attention metadata with on-device tensors."""
+        return HPUPagedAttentionMetadata
+
+
+@dataclass
+class HPUPageAttentionInputBuilderBase:
+    pass
+
+
+class HPUPagedAttention:
+
+    @staticmethod
+    def get_supported_head_sizes() -> list[int]:
+        # FusedSDPA / flat_pa on HPU accepts head dims well beyond the
+        # historical 256 paged-KV software ceiling. Models with large or
+        # asymmetric per-layer head_dim (e.g. gemma-4 global layers use
+        # head_dim=512) must be allowed through this PyTorch attention path.
+        return list(range(1, 577))
+
+    @classmethod
+    def supports_attn_type(cls, attn_type: str) -> bool:
+        """CPU attention supports decoder and encoder-only attention."""
+        from vllm.v1.attention.backend import AttentionType
+
+        return attn_type in (
+            AttentionType.DECODER,
+            AttentionType.ENCODER,
+            AttentionType.ENCODER_ONLY,
+        )
+
+    @staticmethod
+    def get_kv_cache_shape(
+        num_blocks: int,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+    ) -> tuple[int, ...]:
+        return (num_blocks * block_size, num_kv_heads, head_size)
+
+    @staticmethod
+    def split_kv_cache(
+        kv_cache: tuple,
+        num_kv_heads: int,
+        head_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        key_cache = kv_cache[0]
+        value_cache = kv_cache[1]
+        k_scales = kv_cache[2]
+        v_scales = kv_cache[3]
+        return key_cache, value_cache, k_scales, v_scales
+
+    @staticmethod
+    def write_to_paged_cache(key: torch.Tensor, value: torch.Tensor, key_cache: torch.Tensor, value_cache: torch.Tensor,
+                             slot_mapping: torch.Tensor, kv_cache_dtype: str, is_prompt: bool) -> None:
+        cache_ops.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, kv_cache_dtype, is_prompt)
+
+    @staticmethod
+    def forward_decode(**kwargs) -> torch.Tensor:
+        if kwargs.get("kv_lora_rank"):
+            return ops.flat_pa_mla(**kwargs)
+        block_bias = kwargs.get("block_bias")
+        if block_bias is not None and block_bias.dim() == 3:
+            # [pages, query width, block_size]: one shared page list per request.
+            return ops.flat_pa_query_block(**kwargs)
+        return ops.flat_pa(**kwargs)
+
+    @staticmethod
+    def swap_blocks(
+        src_kv_cache: tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
+        dst_kv_cache: tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
+        src_to_dsts: torch.Tensor,
+    ) -> None:
+        src_key_cache = src_kv_cache[0]
+        dst_key_cache = dst_kv_cache[0]
+        cache_ops.swap_blocks(src_key_cache, dst_key_cache, src_to_dsts)
+
+        src_value_cache = src_kv_cache[1]
+        dst_value_cache = dst_kv_cache[1]
+        cache_ops.swap_blocks(src_value_cache, dst_value_cache, src_to_dsts)
+
+        src_key_scales = src_kv_cache[2]
+        dst_key_scales = dst_kv_cache[2]
+        src_value_scales = src_kv_cache[3]
+        dst_value_scales = dst_kv_cache[3]
+        if src_key_scales is not None:
+            cache_ops.swap_blocks(src_key_scales, dst_key_scales, src_to_dsts)
+        if src_value_scales is not None:
+            cache_ops.swap_blocks(src_value_scales[0], dst_value_scales[0], src_to_dsts)
+            cache_ops.swap_blocks(src_value_scales[1], dst_value_scales[1], src_to_dsts)
+
+    @staticmethod
+    def copy_blocks(
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        src_to_dsts: torch.Tensor,
+    ) -> None:
+        key_caches = [kv_cache[0] for kv_cache in kv_caches]
+        value_caches = [kv_cache[1] for kv_cache in kv_caches]
+        key_scales = [kv_cache[2] for kv_cache in kv_caches]
+        value_scales = [kv_cache[3] for kv_cache in kv_caches]
+        cache_ops.copy_blocks(key_caches, value_caches, key_scales, value_scales, src_to_dsts)

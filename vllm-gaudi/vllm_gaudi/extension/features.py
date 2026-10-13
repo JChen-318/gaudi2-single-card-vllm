@@ -1,0 +1,165 @@
+###############################################################################
+# Copyright (C) 2025 Intel Corporation
+#
+# This source code is licensed under the Apache 2.0 license found in the
+# LICENSE file in the root directory of this source tree.
+###############################################################################
+
+from vllm_gaudi.extension.config import (All, Any, Disabled, Enabled, Env, Eq, Hardware, Kernel, MinPackageVersion,
+                                         ModelType, Not, Value, ValueFromList, VersionRange, boolean, list_of,
+                                         split_values_and_flags, to_dict)
+from vllm_gaudi.extension.kernels import fsdpa, block_softmax_adjustment
+from vllm_gaudi.extension.validation import for_all, choice
+
+
+def get_user_flags():
+    flags = [
+        Env('VLLM_DEVELOPER_MODE', boolean),
+        Env('VLLM_PROMPT_BS_BUCKET_MIN', int),
+        Env('VLLM_PROMPT_BS_BUCKET_STEP', int),
+        Env('VLLM_PROMPT_BS_BUCKET_MAX', int),
+        Env('VLLM_PROMPT_BS_BUCKET_PAD_MAX', int),
+        Env('VLLM_PROMPT_BS_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_PROMPT_QUERY_BUCKET_MIN', int),
+        Env('VLLM_PROMPT_QUERY_BUCKET_STEP', int),
+        Env('VLLM_PROMPT_QUERY_BUCKET_MAX', int),
+        Env('VLLM_PROMPT_QUERY_BUCKET_PAD_MAX', int),
+        Env('VLLM_PROMPT_QUERY_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_PROMPT_SEQ_BUCKET_MIN', int),
+        Env('VLLM_PROMPT_SEQ_BUCKET_STEP', int),
+        Env('VLLM_PROMPT_SEQ_BUCKET_MAX', int),
+        Env('VLLM_PROMPT_SEQ_BUCKET_PAD_MAX', int),
+        Env('VLLM_PROMPT_SEQ_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_PROMPT_CTX_BUCKET_MIN', int),
+        Env('VLLM_PROMPT_CTX_BUCKET_STEP', int),
+        Env('VLLM_PROMPT_CTX_BUCKET_MAX', int),
+        Env('VLLM_PROMPT_CTX_BUCKET_PAD_MAX', int),
+        Env('VLLM_PROMPT_CTX_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_DECODE_BS_BUCKET_MIN', int),
+        Env('VLLM_DECODE_BS_BUCKET_STEP', int),
+        Env('VLLM_DECODE_BS_BUCKET_MAX', int),
+        Env('VLLM_DECODE_BS_BUCKET_PAD_MAX', int),
+        Env('VLLM_DECODE_BS_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_DECODE_BLOCK_BUCKET_MIN', int),
+        Env('VLLM_DECODE_BLOCK_BUCKET_STEP', int),
+        Env('VLLM_DECODE_BLOCK_BUCKET_MAX', int),
+        Env('VLLM_DECODE_BLOCK_BUCKET_PAD_MAX', int),
+        Env('VLLM_DECODE_BLOCK_BUCKET_PAD_PERCENT', int),
+        Env('VLLM_BUCKETING_STRATEGY', str),
+        Env('VLLM_PROMPT_BUCKETING_STRATEGY', str, check=choice('exp', 'lin', 'pad')),
+        Env('VLLM_DECODE_BUCKETING_STRATEGY', str, check=choice('exp', 'lin', 'pad')),
+        Env('VLLM_BUCKETING_FROM_FILE', str),
+        Env('VLLM_HPU_QWEN3_COMPILE_LAYER_GROUP_SIZE', int),
+
+        # Non-vllm flags that are also important to print
+        Env('EXPERIMENTAL_WEIGHT_SHARING', str),
+        Env('PT_HPU_WEIGHT_SHARING', str),
+        Env('RUNTIME_SCALE_PATCHING', str),
+
+        # Sliding window flags
+        Env('PT_HPU_SDPA_QKV_SLICE_MODE_FWD', boolean),
+        Env('PT_HPU_SDPA_BC_FACTOR', int),
+        Env('VLLM_FUSEDSDPA_SLIDE_THLD', int),
+
+        # FusedSDPA slicing flags
+        Env('VLLM_HPU_FSDPA_SLICE_ENABLED', boolean),
+        Env('VLLM_HPU_FSDPA_SLICE_SEQ_LEN_THLD', int),
+        Env('VLLM_HPU_FSDPA_SLICE_CHUNK_SIZE', int),
+        Env('VLLM_HPU_FSDPA_SLICE_WITH_GRAPH_BREAKS', boolean),
+        Env('VLLM_HPU_FSDPA_DYNAMIC_FP8', boolean),
+
+        # FusedSDPA query tiling flags
+        Env('VLLM_HPU_FSDPA_Q_TILE_ENABLE', boolean),
+    ]
+    return to_dict(flags)
+
+
+def get_experimental_flags():
+    flags = [
+        Env('VLLM_HPU_NATIVE_DECODE_GRAPH', boolean),
+        Env('VLLM_PT_PROFILE', str),
+        Env('VLLM_PROFILE_PROMPT', str),
+        Env('VLLM_PROFILE_DECODE', str),
+        Env('VLLM_PROFILE_STEPS', list_of(int)),
+        Env('VLLM_DEFRAG_THRESHOLD', int),
+        Env('VLLM_DEFRAG_WITH_GRAPHS', boolean),
+        Env('VLLM_DEBUG', list_of(str), check=for_all(choice('steps', 'defrag', 'fwd'))),
+        Env('VLLM_HPU_FLASHINFER_GDN', boolean),
+        Env('VLLM_HPU_FLASHINFER_DFLASH2', boolean),
+        Env('VLLM_HPU_FLASHINFER_GDN_FUSED_DECODE', boolean),
+        Env('VLLM_HPU_FLASHINFER_GDN_PREFILL', boolean),
+        Env('VLLM_HPU_GDN_DIRECT_STATE', boolean),
+        Env('VLLM_HPU_CGUID_DYNAMIC_QUANT', boolean),
+        Env('VLLM_HPU_CGUID_DYNAMIC_QUANT_MAX_ROWS', int),
+        Env('VLLM_HPU_FUSED_GREEDY_LOGITS', boolean),
+        Env('FLASHINFER_GAUDI_BACKEND', str),
+        Env('FLASHINFER_GAUDI_STATE_DTYPE', str),
+        Env('FLASHINFER_GAUDI_ENABLE_PUBLIC_AUTO', boolean),
+        Env('FLASHINFER_GAUDI_ENABLE_MTP_AUTO', boolean),
+        Env('FLASHINFER_GAUDI_ENABLE_BRIDGE_AUTO', boolean),
+    ]
+    return to_dict(flags)
+
+
+def get_features():
+    supported_attn_impls = ['flex_impl', 'fsdpa_impl', 'naive_impl']
+    features = [
+        Value('fp32_alibi_biases', True, env_var='VLLM_ALIBI_USE_FLOAT32_BIASES'),
+        Value('fp32_softmax', Any(ModelType('qwen2'), ModelType('qwen2_5_vl'))),
+        Value(
+            'fused_block_softmax_adjustment',
+            All(VersionRange(">=1.22.0.494"), Hardware('gaudi3'), Kernel(block_softmax_adjustment),
+                Not(ModelType('qwen2')))),
+        Value('fused_block_softmax', False),
+        Value('flex_impl', False, env_var='VLLM_PROMPT_USE_FLEX_ATTENTION'),
+        Value('fsdpa_impl', All(Kernel(fsdpa), Not(ModelType('mllama'))), env_var='VLLM_PROMPT_USE_FUSEDSDPA'),
+        Value('naive_impl', True),
+        ValueFromList('prompt_attn_impl', supported_attn_impls),
+        Value('skip_warmup', False),
+        Value('merged_prefill', False),
+        Value('use_contiguous_pa', Disabled('prefix_caching'), env_var='VLLM_CONTIGUOUS_PA'),
+        Value('use_bucketing', True, env_var='VLLM_ENABLE_BUCKETING'),
+        Value('bucketing_strategy',
+              'exp',
+              env_var='VLLM_BUCKETING_STRATEGY',
+              env_var_type=str,
+              check=choice('exp', 'lin', 'pad')),
+        Value('defrag', Enabled('use_contiguous_pa')),
+        Value('regional_compilation', True, env_var='VLLM_T_COMPILE_REGIONAL_COMPILATION', env_var_type=boolean),
+        Value('dynamic_shapes_compilation', True, env_var='VLLM_T_COMPILE_DYNAMIC_SHAPES', env_var_type=boolean),
+        Value('fullgraph_compilation', False, env_var='VLLM_T_COMPILE_FULLGRAPH', env_var_type=boolean),
+        Value('scale_adjustment', True, env_var='VLLM_SCALE_ADJUSTMENT', env_var_type=boolean),
+        Value(
+            'flatten_input',
+            Any(ModelType('qwen3_moe'), ModelType('qwen3_5'), ModelType('qwen3_5_text'), ModelType('granitemoe'),
+                ModelType('glm4_moe'), ModelType('gemma4'), ModelType('nemotron_h'), ModelType('deepseek_v4'))),
+        Value('high_level_profiler_enabled', False, env_var='VLLM_PROFILER_ENABLED', env_var_type=boolean),
+        Value('track_graph_compilation', False, env_var='PT_HPU_METRICS_GC_DETAILS', env_var_type=boolean),
+        Value('per_token_kv_scaling_support',
+              All(VersionRange(">=1.24.0.350"), MinPackageVersion("neural_compressor_pt", "3.7")),
+              env_var_type=boolean),
+        Value('moe_chunk', "", env_var='VLLM_MOE_CHUNK', env_var_type=list_of(int)),
+        Value('moe_token_boundary', "", env_var='VLLM_MOE_TOKEN_BOUNDARY', env_var_type=list_of(int)),
+        Value('row_parallel_chunks', 1, env_var='VLLM_ROW_PARALLEL_CHUNKS', env_var_type=int),
+        Value('row_parallel_chunk_threshold', 8192, env_var='VLLM_ROW_PARALLEL_CHUNK_THRESHOLD', env_var_type=int),
+        Value('tp2_fused_ar_norm', False, env_var='VLLM_HPU_TP2_FUSED_AR_NORM', env_var_type=boolean),
+        Value('tp2_gemma_fused_ar_norm', False, env_var='VLLM_HPU_TP2_GEMMA_FUSED_AR_NORM', env_var_type=boolean),
+        Value('tp2_fused_ar_norm_max_bytes', 524288, env_var='VLLM_HPU_TP2_FUSED_AR_NORM_MAX_BYTES', env_var_type=int),
+        Value('use_dispatch_fn',
+              All(VersionRange(">=1.24.0.460"), MinPackageVersion("neural_compressor_pt", "3.7")),
+              env_var_type=boolean),
+        Value('use_hpu_aligned_scale', False, env_var='HPU_ALIGNED_SCALE', env_var_type=boolean),
+        Value('enable_fsdpa_slicing',
+              All(
+                  Eq('use_bucketing', True),
+                  Any(Eq('VLLM_PROMPT_BUCKETING_STRATEGY', 'pad'),
+                      All(Eq('VLLM_PROMPT_BUCKETING_STRATEGY', None), Eq('bucketing_strategy', 'pad'))),
+                  Disabled('merged_prefill'), Kernel(fsdpa)),
+              env_var='VLLM_HPU_FSDPA_SLICE_ENABLED',
+              env_var_type=boolean),
+        # Splits the query dim of prompt attention so no per-call attn_bias reaches 2**31 bytes,
+        # which FusedSDPA cannot index (it silently returns NaN). Off by default: only long
+        # contexts with a wide context bucket can hit the limit.
+        Value('enable_fsdpa_q_tiling', False, env_var='VLLM_HPU_FSDPA_Q_TILE_ENABLE', env_var_type=boolean),
+    ]
+    return split_values_and_flags(features)

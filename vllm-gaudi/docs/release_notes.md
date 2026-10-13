@@ -1,0 +1,121 @@
+# Release Notes
+
+This document provides an overview of the features, changes, and fixes introduced in each release of the vLLM Hardware Plugin for Intel® Gaudi®.
+
+## 0.26.0
+
+This version is based on [vLLM 0.26.0](https://github.com/vllm-project/vllm/releases/tag/v0.26.0) and supports [Intel® Gaudi® Software v1.24.1](https://docs.habana.ai/en/v1.24.1/Release_Notes/GAUDI_Release_Notes.html) with PyTorch 2.11.
+
+This release enables the plugin on upstream vLLM 0.26.0 and realigns the Intel® Gaudi® platform with extensive upstream API drift across MoE/MLA, quantization, serving, attention, KV-offload, the multi-model server, and the NIXL connector. It adds new model support for MiniMax-M3, the Gemma-4 family, the Kimi-K2.5 vision tower, and Qwen3-Coder-Next, improves MXFP4 gpt-oss serving and FP8/INC quantization stability, reduces graph compilation and warmup overhead, strengthens security, and restores the latest `transformers` version.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.26.0.md).
+
+## 0.24.0
+
+This version is based on [vLLM 0.24.0](https://github.com/vllm-project/vllm/releases/tag/v0.24.0) and supports [Intel® Gaudi® Software v1.24.1](https://docs.habana.ai/en/v1.24.1/Release_Notes/GAUDI_Release_Notes.html) with PyTorch 2.11.
+
+This release enables the plugin on upstream vLLM 0.24.0 and adapts the Intel® Gaudi® platform to upstream changes, including the FusedMoE/MoERunner inversion, KV-connector and offloading refactors, the Mamba/GDN rewrite, and serving tokenization changes. It also adds Qwen3-Next architecture support, improves FP8/INC quantization memory usage and stability, switches hybrid models to a TPC-native `causal_conv1d` update path, extends single-card model swapping to hybrid SSM-Transformer models, and strengthens security.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.24.0.md).
+
+## 0.21.0
+
+This version is based on [vLLM 0.21.0](https://github.com/vllm-project/vllm/releases/tag/v0.21.0) and supports [Intel® Gaudi® Software v1.24.0](https://docs.habana.ai/en/v1.24.0/Release_Notes/GAUDI_Release_Notes.html) with PyTorch 2.10.
+
+This release introduces a new padding-aware bucketing strategy for improved memory utilization, W8A8 INT8 quantization with BF16 fallback, and FusedSDPA slicing for better attention performance. It adds an OpenAI-compatible `/v1/models/switch` entrypoint with per-model tool-calling and FP8 configs for online model swap, HPU-specific KV-offload and async speculative decoding fixes, and NIXL connector fixes for heterogeneous and homogeneous deployments. Eager execution mode is now the default in CI, with lazy mode still supported at runtime.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.21.0.md).
+
+## 0.19.1
+
+This version is a minor patch release on top of [0.19.0](release_notes_v0.19.0.md) and continues to support [Intel® Gaudi® Software v1.24.0](https://docs.habana.ai/en/v1.24.0/Release_Notes/GAUDI_Release_Notes.html) with PyTorch 2.10.
+
+This release lifts the `transformers < 5` upper-bound constraint, allowing users to install Hugging Face Transformers v5 alongside the plugin, and refreshes the pinned upstream vLLM stable commit used by build scripts and CI.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.19.1.md).
+
+## 0.19.0
+
+This version is based on [vLLM 0.19.0](https://github.com/vllm-project/vllm/releases/tag/v0.19.0) and supports the latest [Intel® Gaudi® Software v1.24.0](https://docs.habana.ai/en/v1.24.0/Release_Notes/GAUDI_Release_Notes.html) with PyTorch 2.10.
+
+This release introduces Qwen 3.5 model support with compact mode, Mamba prefix caching for hybrid models, MxFP4 weight loading and dequantization, LMCache integration, and a custom depthwise conv1d TPC kernel for MambaMixer2. Performance improvements include torch.compile-compatible online defragmentation, reduced warmup time via decode bucket capping, and optimized hybrid KV cache visibility. Multiple stability fixes address OOM crashes, multimodal prefill batching, grammar bitmask corruption, and FP8 quantization issues.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.19.0.md).
+
+## 0.17.1
+
+This version is based on [vLLM 0.17.1](https://github.com/vllm-project/vllm/releases/tag/v0.17.1) and supports [Intel® Gaudi® Software v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html) and [Intel® Gaudi® Software v1.24.0](https://docs.habana.ai/en/v1.24.0/Release_Notes/GAUDI_Release_Notes.html).
+
+This release adds validated support for Ernie4.5-VL, GPT-OSS (20B/120B), and reranking models (Bert, Roberta, Qwen3-based), introduces MxFP4 weight loading and dequantization, and delivers major Mamba/Granite 4.0-h improvements including prefix caching, custom depthwise conv1d TPC kernels, and precision enhancements. It also introduces RowParallel NIC chunking for distributed inference, logprobs output functionality, and Granite tool calling accuracy improvements. Stability was improved through grammar bitmask corruption fixes.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.17.1.md).
+
+## 0.16.0
+
+This version is based on [vLLM 0.16.0](https://github.com/vllm-project/vllm/releases/tag/v0.16.0) and supports [Intel® Gaudi® Software v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html).
+
+This release introduces validated support and critical stability fixes for Qwen3-VL models leveraging HPUMMEncoderAttention. Performance and stability were improved through backported Mamba architecture optimizations, Docker and UBI infrastructure enhancements, and a forced CPU loading mechanism for INC quantization to prevent OOM errors.
+
+For a full list of changes, see the [Detailed Release Notes](release_notes_v0.16.0.md).
+
+## 0.15.1
+
+This version is based on [vLLM 0.15.1](https://github.com/vllm-project/vllm/releases/tag/v0.15.1) and supports [Intel® Gaudi® Software v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html).
+
+This release introduces validated support for Granite 4.0-h and Qwen3-VL (dense and MoE variants) on Intel Gaudi 3, alongside significant Llama 4 stability fixes. It also features major prefill performance improvements via full chunked prefill attention, FlashAttention online merge, b2b matmul operations, and KV cache sharing. Additionally, this version adds HPU ops for Mamba/SSM architectures to enable hybrid models, and introduces new support for ModelOpt FP8 quantization.
+
+For a full list of changes see the [Detailed Release Notes](release_notes_v0.15.1.md).
+
+## 0.14.1
+
+This version is based on [vLLM 0.14.1](https://github.com/vllm-project/vllm/releases/tag/v0.14.1) with support for [Intel® Gaudi® v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html), and introduces support for the following models on Gaudi 3:
+
+- [ibm-granite/granite-4.0-h-small](https://huggingface.co/ibm-granite/granite-4.0-h-small)
+- [Qwen/Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
+- [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)
+- [Qwen/Qwen3-VL-32B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-32B-Thinking)
+- [Qwen/Qwen3-VL-235B-A22B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct)
+- [Qwen/Qwen3-VL-235B-A22B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8)
+- [Qwen/Qwen3-VL-235B-A22B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Thinking)
+- [Qwen/Qwen3-VL-235B-A22B-Thinking-FP8](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Thinking-FP8)
+
+## 0.13.0
+
+This version is based on [vLLM 0.13.0](https://github.com/vllm-project/vllm/releases/tag/v0.13.0) and supports [Intel® Gaudi® v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html).
+
+The release includes experimental dynamic quantization for MatMul and KV‑cache operations. This feature improves performance, with minimal expected impact on accuracy. To enable the feature, see the [Dynamic Quantization for MatMul and KV‑cache Operations](features/supported_features.md#dynamic-quantization-for-matmul-and-kv-cache-operations) section.
+
+This release also introduces support for the following models supported on Gaudi 3:
+
+- [bielik-11b-v2.6-instruct](https://huggingface.co/speakleash/Bielik-11B-v2.6-Instruct)
+- [bielik-1.5b-v3.0-instruct](https://huggingface.co/speakleash/Bielik-1.5B-v3.0-Instruct)
+- [bielik-4.5b-v3.0-instruct](https://huggingface.co/speakleash/Bielik-4.5B-v3.0-Instruct)
+- [deepseek-ai/DeepSeek-R1-Distill-Llama-70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)
+- [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
+- [Qwen/Qwen2.5-14B-Instruct](https://huggingface.co/Qwen/Qwen2.5-14B-Instruct)
+- [Qwen/Qwen2.5-32B-Instruct](https://huggingface.co/Qwen/Qwen2.5-32B-Instruct)
+- [Qwen/Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct)
+- [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B)
+
+Additionally, the following models were successfully validated:
+
+- [meta-llama/Meta-Llama-3.1-8B](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B)
+- [meta-llama/Meta-Llama-3.1-70B](https://huggingface.co/meta-llama/Meta-Llama-3.1-70B)
+- [meta-llama/Meta-Llama-3.1-70B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-70B-Instruct)
+- [meta-llama/Meta-Llama-3.1-405B](https://huggingface.co/meta-llama/Meta-Llama-3.1-405B)
+- [meta-llama/Meta-Llama-3.1-405B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-405B-Instruct)
+- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+
+For the list of all supported models, see [Validated Models](getting_started/validated_models.md).
+
+## 0.11.2
+
+This version is based on [vLLM 0.11.2](https://github.com/vllm-project/vllm/releases/tag/v0.11.2) and supports [Intel® Gaudi® v1.22.2](https://docs.habana.ai/en/v1.22.2/Release_Notes/GAUDI_Release_Notes.html) and [v1.23.0](https://docs.habana.ai/en/v1.23.0/Release_Notes/GAUDI_Release_Notes.html).
+
+This release introduces the production-ready vLLM Hardware Plugin for Intel® Gaudi®, a community-driven integration layer based on the [vLLM v1 architecture](https://blog.vllm.ai/2025/01/27/v1-alpha-release.html). It enables efficient, high-performance large language model (LLM) inference on [Intel® Gaudi®](https://docs.habana.ai/) AI accelerators. The plugin is an alternative to the [vLLM fork](https://github.com/HabanaAI/vllm-fork), which reaches end of life with this release and will be deprecated in v1.24.0, remaining functional only for legacy use cases. We strongly encourage all fork users to begin planning their migration to the plugin.
+
+The plugin provides [feature parity](features/supported_features.md) with the fork, including mature, production-ready implementations of Automatic Prefix Caching (APC) and async scheduler. Two legacy features - multi-step scheduling and delayed sampling - have been discontinued, as their functionality is now covered by the async scheduler.
+
+For more details on the plugin's implementation, see [Plugin System](dev_guide/plugin_system.md).
+
+To start using the plugin, follow the [Basic Quick Start Guide](getting_started/quickstart/quickstart.md) and explore the rest of this documentation.

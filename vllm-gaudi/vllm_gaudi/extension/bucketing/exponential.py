@@ -1,0 +1,214 @@
+import itertools
+import logging
+import math
+import os
+import numpy as np
+from dataclasses import dataclass, field
+from typing import List, Set, Tuple
+
+from vllm_gaudi.extension.logger import logger as logger
+from vllm_gaudi.extension.runtime import get_config
+
+LONG_CTX_THRESHOLD = 8192
+
+
+class ExponentialBucketingStrategy():
+    long_context: bool = False
+
+    def check_for_user_flags(self, phase):
+        dim = ['bs', 'seq'] if phase == 'prompt' else ['bs', 'block']
+        params = ['min', 'step', 'max']
+        env_vars = [f'VLLM_{phase}_{dim}_BUCKET_{p}'.upper() for dim in dim for p in params]
+        user_flags = []
+        for e in env_vars:
+            if getattr(get_config(), e) is not None:
+                user_flags.append(e)
+        if len(user_flags) > 0:
+            logger().warning("*******************************************************")
+            for flag in user_flags:
+                logger().warning(
+                    f"Using Exponential Strategy - Your configuration {flag}={getattr(get_config(), flag)} will be overwritten!"
+                )
+            logger().warning("*******************************************************")
+
+    def get_prompt_cfgs(self, max_num_prefill_seqs, block_size, max_num_batched_tokens, max_model_len):
+        self.check_for_user_flags('prompt')
+        if getattr(get_config(), 'VLLM_PROMPT_QUERY_BUCKET_MIN') == 1:
+            query_min = 1
+            logger().warning(
+                f"It's only recommended to use VLLM_PROMPT_QUERY_BUCKET_MIN=1 on the decode instance under P/D disaggregation scenario."
+            )
+        else:
+            query_min = block_size
+        use_merged_prefill = get_config().merged_prefill
+        self.long_context = max_model_len >= LONG_CTX_THRESHOLD
+
+        # cfgs shape: [min, step, max, limit]
+        prompt_bs_limit = math.ceil(math.log2(max_num_prefill_seqs)) + 1
+        prompt_bs_bucket_cfg = [1, 2, max_num_prefill_seqs, prompt_bs_limit]
+        max_prompt_seq_limit = math.ceil(math.log2(max_num_batched_tokens))
+        prompt_query_bucket_cfg = [query_min, block_size, max_num_batched_tokens, max_prompt_seq_limit]
+        if self.long_context:
+            # Max ctx for all queries; later we generate additional buckets for max ctx per query
+            max_ctx = max(1, math.ceil((max_model_len - max_num_batched_tokens) // block_size))
+        else:
+            max_ctx = max(1, math.ceil((max_model_len - prompt_query_bucket_cfg[0]) // block_size))
+        max_prompt_ctx_limit = 2 if max_ctx == 1 else math.ceil(math.log2(max_ctx)) + 1
+        prompt_ctx_bucket_cfg = [0, 1, max_ctx, max_prompt_ctx_limit]
+
+        if use_merged_prefill:
+            prev_prompt_bs_bucket_cfg = tuple(prompt_bs_bucket_cfg)
+            prev_prompt_query_bucket_cfg = tuple(prompt_query_bucket_cfg)
+            prev_prompt_ctx_bucket_cfg = tuple(prompt_ctx_bucket_cfg)
+
+            prompt_bs_bucket_cfg = (1, 1, 1, 1)
+            query_min, query_step, _, query_limit = prev_prompt_query_bucket_cfg
+            prompt_query_bucket_cfg = (query_min, query_step * 4, max_num_batched_tokens, query_limit)
+            prompt_ctx_bucket_cfg = (0, 4, max_ctx * max_num_prefill_seqs, max_prompt_ctx_limit)
+
+            msg = ('Merged prefill is enabled!\n'
+                   'Overriding prompt bucketing settings!\n'
+                   f'prompt bs cfg: {prev_prompt_bs_bucket_cfg} -> {prompt_bs_bucket_cfg}\n'
+                   f'prompt query cfg: {prev_prompt_query_bucket_cfg} -> {prompt_query_bucket_cfg}\n'
+                   f'prompt ctx cfg: {prev_prompt_ctx_bucket_cfg} -> {prompt_ctx_bucket_cfg}\n')
+            logger().info(msg)
+
+        msg = ("Prompt bucket config (min, step, max_warmup, limit) "
+               f"bs:{prompt_bs_bucket_cfg}, "
+               f"query:{prompt_query_bucket_cfg}, "
+               f"blocks:{prompt_ctx_bucket_cfg}")
+        logger().info(msg)
+
+        return prompt_bs_bucket_cfg, prompt_query_bucket_cfg, prompt_ctx_bucket_cfg
+
+    def get_decode_cfgs(self,
+                        max_num_seqs,
+                        block_size,
+                        max_num_batched_tokens,
+                        max_model_len,
+                        max_blocks,
+                        skip_decode_block_clamp=False):
+        self.check_for_user_flags('decode')
+        use_contiguous_pa = get_config().use_contiguous_pa
+
+        # cfgs shape: [min, step, max, limit]
+        decode_bs_limit = math.ceil(math.log2(max_num_seqs)) + 1
+        decode_bs_bucket_cfg = [1, 2, max_num_seqs, decode_bs_limit]
+        decode_query_bucket_cfg = [1, 1, 1, 1]
+        # Start from the theoretical worst case: every sequence filled to
+        # max_model_len. Left unbounded this produces block buckets many times
+        # larger than the KV cache actually allocated, which OOMs on the first
+        # decode warmup step.
+        max_decode_blocks = math.ceil(max_model_len / block_size) * max_num_seqs
+        if use_contiguous_pa:
+            # Contiguous PA indexes blocks by the highest block id in the batch,
+            # which is bounded by the size of the cache.
+            max_decode_blocks = min(max_blocks, max_decode_blocks)
+        elif not skip_decode_block_clamp:
+            # Non-contiguous PA counts block *references*: len(block_list) =
+            # sum(num_blocks). With prefix caching a shared block is counted once
+            # per sequence, so the reference count can exceed num_hpu_blocks
+            # (observed ~2x in real long-prompt runs). Clamp to 3x physical blocks
+            # to keep that headroom while still bounding warmup memory. This
+            # ceiling also caps _fallback_max_ctx, so real high-reference decode
+            # batches still find a matching bucket instead of recompiling.
+            #
+            # Models with structurally large or multi-group decode block tables
+            # (GDN/mamba hybrids, interleaved sliding-window, or an inflated
+            # KV-cache block_size) set skip_decode_block_clamp: their block
+            # references legitimately reach the full worst case, so they skip
+            # this clamp and keep the (still finite) worst-case ceiling, and
+            # runtime lookups never recompile. The runner decides this via
+            # HPUModelRunner.warmup_model.
+            max_decode_blocks = min(max_decode_blocks, max_blocks * 3)
+        decode_blocks_limit = math.ceil(math.log2(max_decode_blocks)) + 1
+        # Compensate for wider range: add extra buckets to maintain density at high end
+        if not use_contiguous_pa and max_blocks > 0:
+            bounded_max = max_blocks * 3
+            if max_decode_blocks > bounded_max:
+                decode_blocks_limit += math.ceil(math.log2(max_decode_blocks / bounded_max)) + 1
+        decode_block_bucket_cfg = [1, max_num_seqs, max_decode_blocks, decode_blocks_limit]
+
+        msg = ("Decode bucket config (min, step, max_warmup, limit) "
+               f"bs:{decode_bs_bucket_cfg}, "
+               f"block:{decode_block_bucket_cfg}")
+        logger().info(msg)
+
+        return decode_bs_bucket_cfg, decode_query_bucket_cfg, decode_block_bucket_cfg
+
+    def get_range(self, cfg):
+        range_for_cfg = warmup_range_with_limit(cfg, self.long_context)
+        return sorted(range_for_cfg)
+
+    def get_decode_bs_range(self, cfg):
+        """Keep common power-of-two decode batches as exact graph shapes."""
+        bmin, bstep, bmax, _ = cfg
+        buckets = set(self.get_range(cfg))
+        power_of_two = 1
+        while power_of_two <= bmax:
+            if power_of_two >= bmin and (power_of_two == bmin or power_of_two % bstep == 0):
+                buckets.add(power_of_two)
+            power_of_two *= 2
+        return sorted(buckets)
+
+
+def warmup_range_with_limit(config: Tuple[int, int, int, int], long_context=False):
+    """ 
+    NOTE(kzawora): we'll use exponential spacing for buckets in which scaled 
+    power will return bmin for first bucket iteration, and bmax for last 
+    iteration, with elements between determined by the exponent, and base being 
+    unchanged. Note that after padding to bstep, duplicates may occur, and
+    then shall be removed.
+    Example (bmin=128, bstep=128, bmax=2048, num_buckets=10):
+    There are 16 possible buckets (2048/128), and we'll attempt to select 10 of 
+    them with exponential spacing.
+    base = (bmax/bmin) ** (1/(num_buckets-1)); (2048/128) ** (1/9) = 1.36079
+    exponent = i
+    power = base ** exponent
+    scaled_power = b_min * power
+    For i == 0 (first bucket), power is 1.36079 ** 0 = 1; 
+        scaled_power is 1 * 128 = 128 (==bmin)
+    For i == 9 (last bucket), power is 1.36079 ** 9 = 16; 
+        scaled_power is 16 * 128 = 2048 (==bmax)
+    So, computing for all buckets:
+    scaled_powers_unpadded     = [bmin*base^0(==bmin), bmin*base^1, bmin*base^2,       ...,     bmin*base^9(==bmax)]
+    scaled_powers_unpadded     = [128.00, 174.18, 237.02, 322.54, 438.91, 597.26, 812.75, 1105.98, 1505.01, 2048.00]
+ 
+    We then remove duplicate buckets:
+        scaled_powers_padded   = [   128,    256,    256,    384,    512,    640,    896,    1152,    1536,    2048]
+                                               ^_______^ 
+                                               duplicates
+        buckets                = [   128,    256,            384,    512,    640,    896,    1152,    1536,    2048]
+                                                      ^ 
+                                         duplicate bucket removed
+    """ # noqa: E501
+
+    bmin, bstep, bmax, num_buckets = config
+    add_zero_or_one_bucket = bmin in [0, 1]
+    if add_zero_or_one_bucket:
+        bmin_origin = bmin
+        bmin = bstep
+    assert num_buckets > 0, "num_buckets must be a positive integer"
+
+    num_buckets_exp = num_buckets
+    first_step = bmax
+
+    if num_buckets_exp <= 1:
+        return [bmax]
+
+    buckets: Set[Tuple[int, int]] = set()
+
+    for i in range(num_buckets_exp):
+        power_unpadded = bmin * np.float_power(first_step / bmin, (1. / float(num_buckets_exp - 1)) * i)
+        if i == num_buckets - 1 and get_config().use_contiguous_pa:
+            bucket = bmax
+        else:
+            bucket = math.ceil(power_unpadded / bstep) * bstep
+        buckets.add(bucket)
+
+    if add_zero_or_one_bucket:
+        buckets.add(bmin_origin)
+    sorted_buckets = list(sorted(buckets))
+    if sorted_buckets and sorted_buckets[-1] > bmax:
+        sorted_buckets[-1] = bmax
+    return sorted_buckets

@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: Apache-2.0
+
+###############################################################################
+# Copyright (C) 2024 Habana Labs, Ltd. an Intel Company
+###############################################################################
+
+from dataclasses import dataclass
+from typing import Optional, Union
+from vllm.v1.attention.backend import MultipleOf
+
+import torch
+
+from vllm.v1.attention.backend import AttentionMetadata, AttentionImpl
+from vllm_gaudi.attention.backends.hpu_attn import (HPUAttentionBackend, HPUAttentionImpl, HPUAttentionMetadata)
+from vllm_gaudi.extension.logger import logger as init_logger
+from vllm.v1.attention.backends.registry import (register_backend, AttentionBackendEnum)
+
+logger = init_logger()
+
+
+@register_backend(AttentionBackendEnum.CUSTOM, "HPU_ATTN_V1")
+class HPUAttentionBackendV1(HPUAttentionBackend):
+
+    @classmethod
+    def supports_non_causal(cls) -> bool:
+        """The prompt path accepts an explicit bidirectional attention bias."""
+        return True
+
+    @staticmethod
+    def get_name() -> str:
+        return "CUSTOM"
+
+    @staticmethod
+    def get_impl_cls() -> type["AttentionImpl"]:
+        return HPUAttentionImpl
+
+    @staticmethod
+    def get_metadata_cls() -> type["AttentionMetadata"]:
+        return HPUAttentionMetadataV1
+
+    @staticmethod
+    def get_supported_kernel_block_sizes() -> list[Union[int, MultipleOf]]:
+        # 16 is supported for testing/smaller models; 128 is the standard HPU
+        # kernel block size; 528 is required for Granite 4.0-H
+        # (granitemoehybrid) without prefix caching (16-token FA alignment),
+        # 768 with prefix caching (chunk-aligned).
+        return [16, 128, 528, 768]
+
+    @classmethod
+    def get_preferred_block_size(cls, default_block_size: int) -> int:
+        # Always prefer 128-token HPU kernel blocks. For Granite 4.0-H,
+        # check_and_update_config computes the correct block size (528 or
+        # 768) before update_block_size_for_backend runs.
+        return 128
+
+
+@dataclass
+class HPUAttentionMetadataV1(HPUAttentionMetadata):
+    # TODO(kwisniewski98): for now, in V1 input positions are not provided
+    # which needs to be fixed in the future, as we need to support MLA
+    """Metadata for HPUAttentionbackend."""
+    is_prompt: bool
+    attn_bias: Optional[torch.Tensor]
+    seq_lens_tensor: Optional[torch.Tensor]
+    context_lens_tensor: Optional[torch.Tensor]
+    query_start_loc: Optional[torch.Tensor] = None
+    query_start_loc_p: Optional[torch.Tensor] = None
+    padding_mask_flat: Optional[torch.Tensor] = None
+    blocks_caching_range: Optional[torch.Tensor] = None
+    mamba_chunks_to_block_mapping: Optional[torch.Tensor] = None
+    seqlens_offsets_for_blocks: Optional[torch.Tensor] = None
+    window_block_list: Optional[torch.Tensor] = None
+    dflash_full_query: bool = False
+    gdn_initial_state_indices: torch.Tensor | None = None
+
+    def seq_len(self):
+        return self.slot_mapping.size(-1)
+
+    def num_blocks(self):
+        if self.block_list is None:
+            return 0
+        return self.block_list.numel()
+
+    @classmethod
+    def make_prefill_metadata(cls,
+                              attn_bias,
+                              block_list,
+                              context_lens_tensor,
+                              seq_lens_tensor,
+                              slot_mapping,
+                              block_size,
+                              prep_initial_states=None,
+                              has_initial_states_p=None,
+                              last_chunk_indices_p=None,
+                              load_indices_tensor=None,
+                              store_indices_tensor=None,
+                              num_accepted_tokens=None,
+                              query_start_loc=None,
+                              padding_mask_flat=None,
+                              blocks_caching_range=None,
+                              mamba_chunks_to_block_mapping=None,
+                              seqlens_offsets_for_blocks=None,
+                              window_block_list=None,
+                              direct_gdn_state=False,
+                              causal=True,
+                              window_attn_bias=None):
+        return cls(is_prompt=True,
+                   block_list=block_list,
+                   block_mapping=None,
+                   block_usage=None,
+                   block_groups=None,
+                   attn_bias=attn_bias,
+                   alibi_blocks=None,
+                   context_lens_tensor=context_lens_tensor,
+                   seq_lens_tensor=seq_lens_tensor,
+                   input_positions=None,
+                   slot_mapping=slot_mapping,
+                   block_size=block_size,
+                   prep_initial_states=prep_initial_states,
+                   has_initial_states_p=has_initial_states_p,
+                   last_chunk_indices_p=last_chunk_indices_p,
+                   load_indices_tensor=load_indices_tensor,
+                   store_indices_tensor=store_indices_tensor,
+                   num_accepted_tokens=num_accepted_tokens,
+                   query_start_loc=query_start_loc,
+                   query_start_loc_p=query_start_loc,
+                   padding_mask_flat=padding_mask_flat,
+                   blocks_caching_range=blocks_caching_range,
+                   mamba_chunks_to_block_mapping=mamba_chunks_to_block_mapping,
+                   seqlens_offsets_for_blocks=seqlens_offsets_for_blocks,
+                   window_block_list=window_block_list,
+                   window_attn_bias=window_attn_bias,
+                   direct_gdn_state=direct_gdn_state,
+                   causal=causal)
+
+    @classmethod
+    def make_decode_metadata(cls,
+                             block_list,
+                             block_usage,
+                             block_groups,
+                             input_positions,
+                             slot_mapping,
+                             block_size,
+                             window_block_list,
+                             window_block_usage,
+                             window_block_groups,
+                             chunked_block_list,
+                             chunked_block_usage,
+                             chunked_block_groups,
+                             load_indices_tensor=None,
+                             store_indices_tensor=None,
+                             num_accepted_tokens=None,
+                             query_start_loc=None,
+                             seq_lens_tensor=None,
+                             direct_gdn_state=False,
+                             dflash_full_query=False,
+                             gdn_initial_state_indices=None,
+                             causal=True):
+        return cls(is_prompt=False,
+                   block_mapping=None,
+                   alibi_blocks=None,
+                   attn_bias=None,
+                   seq_lens_tensor=seq_lens_tensor,
+                   context_lens_tensor=None,
+                   block_list=block_list,
+                   block_usage=block_usage,
+                   block_groups=block_groups,
+                   window_block_list=window_block_list,
+                   window_block_usage=window_block_usage,
+                   window_block_groups=window_block_groups,
+                   chunked_block_list=chunked_block_list,
+                   chunked_block_usage=chunked_block_usage,
+                   chunked_block_groups=chunked_block_groups,
+                   input_positions=input_positions,
+                   slot_mapping=slot_mapping,
+                   block_size=block_size,
+                   prep_initial_states=None,
+                   load_indices_tensor=load_indices_tensor,
+                   store_indices_tensor=store_indices_tensor,
+                   num_accepted_tokens=num_accepted_tokens,
+                   query_start_loc=query_start_loc,
+                   query_start_loc_p=query_start_loc,
+                   direct_gdn_state=direct_gdn_state,
+                   dflash_full_query=dflash_full_query,
+                   gdn_initial_state_indices=gdn_initial_state_indices,
+                   causal=causal)

@@ -1,0 +1,661 @@
+# SPDX-License-Identifier: Apache-2.0
+"""HPU V4.1 model registration with prepared weights and explicit stage inputs."""
+
+from pathlib import Path
+
+import torch
+from torch import nn
+
+from vllm.distributed import get_pp_group, get_tensor_model_parallel_rank
+from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsPP
+from vllm.models.deepseek_v4.common.vision import DeepseekV4Aligner, DeepseekV4ViT
+from vllm.models.deepseek_v4_1.common.mm_preprocess import (
+    IMAGE,
+    IMAGE_END,
+    IMAGE_NEW_LINE,
+    IMAGE_PLACEHOLDER,
+    IMAGE_START,
+    DeepseekV4VLDummyInputsBuilder,
+    DeepseekV4VLMultiModalProcessor,
+    DeepseekV4VLProcessingInfo,
+)
+from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.sequence import IntermediateTensors
+
+from vllm_gaudi import envs
+from vllm_gaudi.models.deepseek_v41_program import CompiledStage, PreparedStage, PreparedInput, PrefillInput
+from vllm_gaudi.ops.deepseek_v41_host import EngramHost
+from vllm_gaudi.ops.deepseek_v41_prefill_capacity import prefill_capacity
+from vllm_gaudi.ops.deepseek_v41_replay import StageReplay, stage_collectives
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    DeepseekV4VLMultiModalProcessor, info=DeepseekV4VLProcessingInfo, dummy_inputs=DeepseekV4VLDummyInputsBuilder
+)
+class HpuDeepseekV41ForCausalLM(nn.Module, SupportsMultiModal, SupportsPP):
+    requires_raw_input_tokens = True
+    supports_encoder_tp_data = True
+
+    def __init__(self, *, vllm_config, prefix=""):
+        super().__init__()
+        del prefix
+        if not envs.VLLM_HPU_DSV41_PREPARED_SHARDS:
+            raise RuntimeError("V4.1 HPU execution requires VLLM_HPU_DSV41_PREPARED_SHARDS=1")
+        parallel = vllm_config.parallel_config
+        if (parallel.tensor_parallel_size, parallel.pipeline_parallel_size) not in ((2, 2), (4, 1)):
+            raise ValueError("The prepared V4.1 profile requires TP2 x PP2 or TP4 x PP1")
+        self.tensor_parallel_size = parallel.tensor_parallel_size
+        self.pipeline_parallel_size = parallel.pipeline_parallel_size
+        self.prefill_capacity = prefill_capacity(
+            vllm_config.scheduler_config.max_num_batched_tokens, self.tensor_parallel_size
+        )
+        if vllm_config.load_config.load_format != "dsv41_prepared":
+            raise ValueError("V4.1 rank files require --load-format dsv41_prepared")
+        self.config = vllm_config.model_config.hf_config
+        self.multimodal_config = vllm_config.model_config.multimodal_config
+        self.directory = Path(vllm_config.model_config.model)
+        self.device = vllm_config.device_config.device
+        self.pp_rank, self.tp_rank = get_pp_group().rank_in_group, get_tensor_model_parallel_rank()
+        self.is_first_stage = self.pp_rank == 0
+        self.is_last_stage = self.pp_rank == self.pipeline_parallel_size - 1
+        self.native = envs.VLLM_HPU_DSV41_GRAPH_REPLAY and self.tensor_parallel_size >= 2
+        # The selected-row attention candidate is registered by the same
+        # extension as the prepared MoE kernels, but an ordinary V4.1 worker
+        # may have already loaded an older extension from the site package.
+        # Checking only the MoE symbol would therefore silently skip loading
+        # the candidate and leave the graph with an incomplete op namespace.
+        required_op = (
+            "custom_deepseek_v41_woa_fp8_roundtrip_gaudi2"
+            if envs.VLLM_HPU_DSV41_WOA_OUTPUT_ROUNDTRIP
+            else "custom_deepseek_v41_paged_attention_bf16_gaudi2"
+            if envs.VLLM_HPU_DSV41_PAGED_SELECTED_KV
+            else "custom_deepseek_v41_mxfp4_prepared_moe_bf16_gaudi2"
+        )
+        required_ops = [required_op]
+        required_ops.extend(("custom_deepseek_v41_attention_norm_quant_gaudi2",
+                             "custom_deepseek_v41_engram_update_bf16_gaudi2"))
+        if envs.VLLM_HPU_DSV41_BATCH_C1_NUMERICS:
+            required_ops.extend(
+                (
+                    "custom_deepseek_v41_q_norm_projection_rope_gaudi2",
+                    "custom_deepseek_v41_ffn_norm_quant_gaudi2",
+                    "custom_deepseek_v41_expert_n256_moe_prequant_horizontal_fp8_gaudi2",
+                )
+            )
+        if envs.VLLM_HPU_DSV41_PREFILL_VECTOR_QUANT:
+            if envs.VLLM_HPU_DSV41_QUANT_ROUNDTRIP:
+                required_ops.append("custom_deepseek_v41_quant_roundtrip_wide_bf16_gaudi2")
+            if envs.VLLM_HPU_DSV41_WOA_OUTPUT_ROUNDTRIP:
+                required_ops.append("custom_deepseek_v41_woa_fp8_roundtrip_wide_gaudi2")
+        if envs.VLLM_HPU_DSV41_NATIVE_ROPE and envs.VLLM_HPU_DSV41_PREFILL_ROPE:
+            required_ops.extend(
+                ("custom_deepseek_v41_prefill_rope_bf16_gaudi2", "custom_deepseek_v41_prefill_rope_inverse_bf16_gaudi2")
+            )
+        if any(not hasattr(torch.ops.custom_op, name) for name in required_ops):
+            torch.ops.load_library(envs.VLLM_HPU_DSV4_TPC_OP_LIBRARY)
+        if envs.VLLM_HPU_DSV41_PREFILL_ROPE:
+            for name in (
+                "custom_deepseek_v41_prefill_rope_bf16_gaudi2",
+                "custom_deepseek_v41_prefill_rope_inverse_bf16_gaudi2",
+            ):
+                if not hasattr(torch.ops.custom_op, name):
+                    raise RuntimeError("Rebuild the V4.1 native extension before enabling prefill RoPE: " + name)
+        if envs.VLLM_HPU_DSV41_PREFILL_Q_PROJECTION and not hasattr(
+            torch.ops.custom_op, "custom_deepseek_v41_prefill_q_projection_rope_gaudi2"
+        ):
+            raise RuntimeError("Rebuild the V4.1 native extension before enabling compiled prefill Q projection")
+        if (envs.VLLM_HPU_DSV41_PREFILL_INDEX_SRAM or envs.VLLM_HPU_DSV41_PREFILL_REINDEX_SRAM) and not hasattr(
+            torch.ops.custom_op, "custom_deepseek_v41_prefill_index_scores_gaudi2"
+        ):
+            raise RuntimeError("Rebuild the V4.1 native extension before enabling SRAM prefill index scoring")
+        if self.native:
+            from vllm_gaudi.distributed.tp2_fused_ar_norm import initialize_tp2_fused_ar_norm_runtime
+
+            initialize_tp2_fused_ar_norm_runtime()
+        reduce, gather = stage_collectives(self.tp_rank, self.native, self.tensor_parallel_size)
+        self.program = PreparedStage(
+            self.directory,
+            self.pp_rank,
+            self.tp_rank,
+            reduce,
+            gather,
+            self.device,
+            max_length=vllm_config.model_config.max_model_len,
+            prefill_tokens=self.prefill_capacity,
+            tensor_parallel_size=self.tensor_parallel_size,
+            pipeline_parallel_size=self.pipeline_parallel_size,
+            dspark=envs.VLLM_HPU_DSV41_DSPARK,
+        )
+        self.program.replay_owner = (StageReplay(self.program, greedy_tail=not self.program.dspark)
+                                     if self.native else None)
+        self.ordinary = CompiledStage(self.program, prepared_tp4=not self.native and self.tensor_parallel_size == 4)
+        self.compiled_input = None
+        self.compiled_input_calls = 0
+        if (not self.native and self.tensor_parallel_size == 4) or (
+            envs.VLLM_HPU_DSV41_DEVICE_ROUNDS and self.program.dspark and self.is_first_stage
+        ):
+            from vllm_gaudi.compilation.deepseek_v41_tp4 import make_backend
+
+            self.compiled_input = torch.compile(
+                PreparedInput(self.program.weights.embed, self.tp_rank, self.program.reduce),
+                backend=make_backend(),
+                fullgraph=True,
+                dynamic=False,
+            )
+        self.engram_host, self.step_ticket, self.last_aux = None, None, None
+        self._decode_prefix = None
+        self._step_request_id = None
+        self.step_use_replay = False
+        self.extra = dict(vllm_config.load_config.model_loader_extra_config or {})
+        self.vision = self.aligner = None
+        if self.pp_rank == 0 and envs.VLLM_HPU_DSV41_VISION:
+            if self.multimodal_config.mm_encoder_tp_mode != "data":
+                raise ValueError("Prepared V4.1 vision weights require --mm-encoder-tp-mode data")
+            # The prepared file already owns the tensors. Allocate no second
+            # tower here; bind its parameters to the loaded storage below.
+            with torch.device("meta"):
+                self.vision, self.aligner = DeepseekV4ViT(self.config), DeepseekV4Aligner(self.config)
+
+    def load_prepared_weights(self):
+        self.program.load_prepared(self.device)
+        if self.pp_rank == 0:
+            if not envs.VLLM_HPU_DSV41_ENGRAM_HOST_TABLE:
+                raise RuntimeError("V4.1 Engram must use the native host table; no HBM/eager fallback is available")
+            self.engram_host = EngramHost(
+                self.directory,
+                self.tp_rank,
+                self.device,
+                max_tokens=self.prefill_capacity,
+                checkpoint_audit=self.extra.get("checkpoint_audit"),
+                force_lock=self.extra.get("engram_force_lock", False),
+                resident_tables=self.extra.get("engram_resident_tables"),
+            )
+            self._bind_vision()
+
+    def _bind_vision(self):
+        if self.vision is None:
+            return
+        for name, module in (("vision", self.vision), ("aligner", self.aligner)):
+            tree = self.program.weights.get_submodule(name)
+            for target_name, parameter in list(module.named_parameters()):
+                parent_name, _, attribute = target_name.rpartition(".")
+                value = getattr(tree.get_submodule(parent_name), attribute)
+                if value.shape != parameter.shape:
+                    raise ValueError(f"Prepared vision geometry differs from upstream module: {name}.{target_name}")
+                setattr(module.get_submodule(parent_name), attribute, nn.Parameter(value, requires_grad=False))
+
+    def load_weights(self, weights):
+        del weights
+        raise RuntimeError("Use the registered dsv41_prepared loader; original HF expert loading is disabled")
+
+    def get_language_model(self):
+        return self
+
+    @classmethod
+    def get_placeholder_str(cls, modality, i):
+        del i
+        if modality != "image":
+            raise ValueError(f"Unsupported V4.1 modality: {modality}")
+        return IMAGE_PLACEHOLDER
+
+    def embed_multimodal(self, **kwargs):
+        from vllm_gaudi.ops.deepseek_v41_vision import assemble_image_span, image_span_indices
+
+        patches = kwargs.get("patches")
+        if patches is None:
+            return []
+        if self.vision is None:
+            raise RuntimeError("Vision encoding is owned by PP0 with VLLM_HPU_DSV41_VISION=1")
+        vit_grid, llm_grid = kwargs["vit_grid"].tolist(), kwargs["llm_grid"].tolist()
+        types, vit_offset, span_offset, result = kwargs["types"].to("cpu").tolist(), 0, 0, []
+        for (height, width), (out_height, out_width) in zip(vit_grid, llm_grid, strict=True):
+            count = height * width
+            image = self.aligner(
+                self.vision(patches[vit_offset : vit_offset + count].to(torch.bfloat16), height, width), height, width
+            )
+            span_length = out_height * (out_width + 1) + 2
+            indices = image_span_indices(
+                types[span_offset : span_offset + span_length],
+                image=IMAGE,
+                start=IMAGE_START,
+                newline=IMAGE_NEW_LINE,
+                end=IMAGE_END,
+                image_rows=image.shape[0],
+            )
+            special = torch.stack(
+                (self.program.weights.image_start, self.program.weights.image_newline, self.program.weights.image_end)
+            )
+            span = assemble_image_span(image, special, indices)
+            result.append(span)
+            vit_offset, span_offset = vit_offset + count, span_offset + span_length
+        return tuple(result)
+
+    def embed_input_ids(self, input_ids, multimodal_embeddings=None, *, is_multimodal=None):
+        if not self.is_first_stage:
+            raise RuntimeError("Target embedding is owned by PP0")
+        values = self.program.embed(input_ids.masked_fill(input_ids == 129265, 129264))
+        if multimodal_embeddings is not None and len(multimodal_embeddings):
+            from vllm.model_executor.models.utils import _merge_multimodal_embeddings
+
+            if is_multimodal is None:
+                raise ValueError("V4.1 image embeddings require the processor's span mask")
+            values = _merge_multimodal_embeddings(
+                inputs_embeds=values, multimodal_embeddings=multimodal_embeddings, is_multimodal=is_multimodal
+            )
+        return values
+
+    def make_empty_intermediate_tensors(self, batch_size, dtype, device):
+        return IntermediateTensors(
+            {
+                "hidden_states": torch.empty(batch_size, 4, 5120, dtype=dtype, device=device),
+                "pre_mix": torch.empty(batch_size, 4, dtype=torch.float32, device=device),
+            }
+        )
+
+    def prepare_step(self, request_id, token_ids, *, is_decode, reset=False, use_replay=None):
+        self.step_use_replay = is_decode if use_replay is None else use_replay
+        self._step_request_id = request_id
+        if self.is_first_stage:
+            if self.step_ticket is not None:
+                raise RuntimeError("Previous V4.1 verify has not committed its accepted input prefix")
+            if reset:
+                self.engram_host.reset(request_id)
+            image_mask = [token in (129264, 129265) for token in token_ids]
+            inputs = getattr(self, "device_engram_inputs", None)
+            if (envs.VLLM_HPU_DSV41_DEVICE_CLOSED_LOOP and self.step_use_replay
+                    and len(token_ids) == 1 and inputs is not None and inputs.owner is not None
+                    and inputs.owner[1] == request_id):
+                from vllm_gaudi.ops.deepseek_v41_device_loop import DeviceInputTransaction
+
+                self.step_ticket = DeviceInputTransaction(self.engram_host.history.prepare_mirror(
+                    request_id, token_ids, image_mask))
+                return
+            device_layer1 = bool(
+                envs.VLLM_HPU_DSV41_V2_DEVICE_ENGRAM and is_decode and self.engram_host.device_pending == request_id
+            )
+            self.step_ticket = self.engram_host.prepare(
+                request_id, token_ids, image_mask, defer_wait=True, device_layer1=device_layer1
+            )
+            # Native C1 replay consumes the fixed device layer-1 buffer.  For
+            # decode it is normally produced directly from the sampled device
+            # token; a C1 prompt transaction instead stages the exact host
+            # lookup into that same buffer before replay.  Sampling remains
+            # disabled until the full prompt has been committed by the runner.
+            if (
+                envs.VLLM_HPU_DSV41_V2_DEVICE_ENGRAM
+                and self.step_use_replay
+                and len(token_ids) == 1
+                and self.engram_host.device_pending is None
+            ):
+                self.engram_host.stage_device_c1_reference(request_id, self.step_ticket.buffers[0])
+
+    def device_decode_inputs(self):
+        """Share fixed C1-C6 mapped producers with device-owned continuation."""
+        if not hasattr(self, "device_engram_inputs"):
+            from vllm_gaudi.ops.deepseek_v41_device_engram import DeviceEngramRounds
+
+            ids = torch.empty(1, dtype=torch.int32, device=self.device)
+            history = torch.empty(3, dtype=torch.int32, device=self.device)
+            self.device_engram_inputs = DeviceEngramRounds(self.engram_host, ids, history)
+        return self.device_engram_inputs
+
+    def forward_device_input(self, input_ids, positions, rows):
+        """Submit the warmed embedding-to-sampling stage without a host ticket."""
+        if self.pp_rank != 0 or not self.is_last_stage or self.program.dspark or not self.native:
+            raise RuntimeError("Device continuation requires an ordinary complete native stage")
+        replay = self.program.replay_owner
+        output, _, aux = replay.from_input_ids(positions, input_ids.reshape(-1), rows)
+        self.last_aux = aux
+        return output
+
+    def prepare_device_engram(self, request_id, device_token):
+        if self.pp_rank != 0 or not envs.VLLM_HPU_DSV41_V2_DEVICE_ENGRAM:
+            raise RuntimeError("Device Engram preparation is outside the qualified PP0 V2 path")
+        if self.step_ticket is not None or self._decode_prefix is not None:
+            raise RuntimeError("Device Engram preparation overlaps an unfinished model input")
+        return self.engram_host.prepare_device_c1(request_id, device_token)
+
+    def complete_step(self, committed_inputs):
+        if self.pp_rank == 0:
+            if self.step_ticket is None:
+                raise RuntimeError("V4.1 completion has no input transaction")
+            from vllm_gaudi.ops.deepseek_v41_device_loop import DeviceInputTransaction
+
+            if isinstance(self.step_ticket, DeviceInputTransaction):
+                self.engram_host.history.commit(self.step_ticket.batch, committed_inputs)
+            else:
+                self.engram_host.complete(self.step_ticket, committed_inputs)
+            self.step_ticket = None
+            self._step_request_id = None
+
+    def complete_step_device(self, committed_inputs):
+        """Finish a verify after PP has transferred the validated scalar."""
+        if isinstance(committed_inputs, torch.Tensor):
+            raise RuntimeError("complete_step_device expects the consumed committed scalar")
+        self.complete_step(int(committed_inputs))
+
+    def initialize_request_state(self, capacity):
+        """Request-owned state shared by native C1 and optional batch replay."""
+        if not self.native:
+            raise RuntimeError("Request slots require ordinary native replay")
+        if self.program.dspark and capacity != 1:
+            raise ValueError("DSpark prefix state currently requires one active request")
+        from vllm_gaudi.ops.deepseek_v41_batch_state import BatchStageState
+
+        self.batch_state = BatchStageState(self.program, capacity)
+
+    def initialize_request_batches(self, capacity):
+        if not envs.VLLM_HPU_DSV41_BATCH_DECODE:
+            raise RuntimeError("Request batches require the explicit ordinary native replay configuration")
+        from vllm_gaudi.ops.deepseek_v41_batch_replay import BatchStageReplay
+
+        self.initialize_request_state(capacity)
+        self.batch_replay = BatchStageReplay(self.program)
+        lanes = envs.VLLM_HPU_DSV41_PP_MICROBATCHES
+        if lanes not in (1, 2):
+            raise ValueError("Ordinary PP decode supports one batch or two owned microbatches")
+        self.batch_replay_lanes = (self.batch_replay,) + tuple(BatchStageReplay(self.program) for _ in range(lanes - 1))
+        self.batch_input_seeds = (
+            {
+                bucket: (
+                    torch.zeros(bucket, 4, 5120, dtype=torch.bfloat16, device=self.device),
+                    torch.zeros(bucket, 4, dtype=torch.float32, device=self.device),
+                )
+                for bucket in (1, 2, 4, 8, 16, 32, 64)
+                if bucket <= 1 << (capacity - 1).bit_length()
+            }
+            if self.pp_rank == 0
+            else {}
+        )
+
+    def forward_request_batch(self, input_ids, positions, slots, pages, spans, intermediate_tensors=None, *, lane=0):
+        """Run one C1 per request through one native stage entry."""
+        if self.step_ticket is not None or self._decode_prefix is not None:
+            raise RuntimeError("Request batch overlaps an unfinished model transaction")
+        if not 0 <= lane < len(self.batch_replay_lanes):
+            raise ValueError("Invalid request-batch scratch lane")
+        if self.pp_rank == 0:
+            self.step_ticket = self.engram_host.prepare_batch(spans, capacity=input_ids.numel(), defer_wait=True)
+            engram = self.engram_host.wait(self.step_ticket)
+            # Embedding is captured in the first four-layer group.
+            hidden, pre = self.batch_input_seeds[input_ids.numel()]
+        else:
+            if intermediate_tensors is None:
+                raise RuntimeError("Request batch lacks its PP producer")
+            hidden, pre = intermediate_tensors["hidden_states"], intermediate_tensors["pre_mix"]
+            engram = ()
+        host_positions = tuple(span[1] for span in spans) + (-1,) * (input_ids.numel() - len(spans))
+        hidden, pre, _ = self.batch_replay_lanes[lane](
+            hidden, pre, positions, input_ids, engram, slots, pages, host_positions=host_positions
+        )
+        if self.pp_rank == 0:
+            return IntermediateTensors({"hidden_states": hidden, "pre_mix": pre})
+        return hidden
+
+    def complete_request_batch(self, counts):
+        if self.pp_rank == 0:
+            self.engram_host.complete_batch(self.step_ticket, counts)
+            self.step_ticket = None
+
+    @staticmethod
+    def _input_signature(value):
+        return (
+            value.untyped_storage()._cdata,
+            value.storage_offset(),
+            tuple(value.shape),
+            value.stride(),
+            value.dtype,
+            value.device,
+        )
+
+    def begin_decode_prefix(self, input_ids, positions):
+        if not self.native and self.tensor_parallel_size == 4:
+            if (
+                not self.decode_prefix_ready(self.program.search_length)
+                or input_ids.numel() != 1
+                or self.step_ticket is not None
+                or self._decode_prefix is not None
+                or self.engram_host.device_pending is None
+            ):
+                raise RuntimeError("TP4 continuation requires one prepared, device-owned input generation")
+            input_ids, positions = input_ids.reshape(-1), positions.reshape(-1)
+            residual, pre = self.compiled_input(input_ids)
+            # Groups before the first layer-14 consumer never read the late
+            # input. Keep their argument contract identical to ordinary calls.
+            late = self.engram_host.prefix_late_placeholder
+            residual, pre = self.ordinary.prefix(
+                residual, pre, positions, input_ids, (self.engram_host.device_rows, late)
+            )
+            self._decode_prefix = (
+                self._input_signature(input_ids),
+                self._input_signature(positions),
+                residual,
+                pre,
+                self.program.generation,
+                self.program.search_length,
+            )
+            return
+        if (
+            self.pp_rank != 0
+            or not self.native
+            or not envs.VLLM_HPU_DSV41_V2_SEGMENTED_PREFIX
+            or self.program.dspark
+            or input_ids.numel() != 1
+        ):
+            raise RuntimeError("V4.1 decode prefix is outside the qualified PP0 C1 path")
+        if self.step_ticket is not None or self._decode_prefix is not None:
+            raise RuntimeError("V4.1 decode prefix overlaps an unfinished input transaction")
+        self.program.replay_owner.begin_segmented_from_input_ids(positions.reshape(-1), input_ids.reshape(-1))
+        self._decode_prefix = (
+            self._input_signature(input_ids.reshape(-1)),
+            self._input_signature(positions.reshape(-1)),
+        )
+
+    @property
+    def decode_prefix_pending(self):
+        return self._decode_prefix is not None
+
+    def decode_prefix_ready(self, search_length):
+        """Whether segmented PP0 replay is safe for the next search bucket."""
+        if not self.native and self.tensor_parallel_size == 4:
+            return (
+                envs.VLLM_HPU_DSV41_V2_SEGMENTED_PREFIX
+                and not self.program.dspark
+                and self.ordinary.prefix_ready(search_length)
+            )
+        return (
+            self.pp_rank == 0
+            and self.native
+            and envs.VLLM_HPU_DSV41_V2_SEGMENTED_PREFIX
+            and not self.program.dspark
+            and self.program.replay_owner.input_variant_ready(search_length)
+        )
+
+    def forward(self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None, **kwargs):
+        del kwargs
+        if not self.program.loaded:
+            raise RuntimeError("Prepared V4.1 weights have not been loaded")
+        input_ids, positions = input_ids.reshape(-1), positions.reshape(-1).to(torch.int32)
+        pp_wire = None
+        fused_text_io = (
+            self.pp_rank == 0
+            and envs.VLLM_HPU_DSV41_FUSED_STAGE_IO
+            and self.native
+            and self.step_use_replay
+            and inputs_embeds is None
+        )
+        from vllm_gaudi.ops.deepseek_v41_replay import _native_input_count_compatible
+
+        native_input = (
+            self.pp_rank == 0
+            and self.native
+            and self.step_use_replay
+            and (envs.VLLM_HPU_DSV41_NATIVE_INPUT_GRAPH
+                 or self.program.dspark and envs.VLLM_HPU_DSV41_DSPARK_NATIVE_TARGET_INPUT)
+            and _native_input_count_compatible(self.program, input_ids.numel())
+            and inputs_embeds is None
+            and not fused_text_io
+        )
+        tp4_prefix = not self.native and self.tensor_parallel_size == 4 and self._decode_prefix is not None
+        if self.pp_rank == 0:
+            if self.step_ticket is None:
+                raise RuntimeError("V4.1 input metadata was not prepared by its worker")
+            if fused_text_io or native_input or tp4_prefix:
+                residual = pre = None
+            elif getattr(self, "compiled_input", None) is not None and input_ids.numel() <= 6 and inputs_embeds is None:
+                residual, pre = self.compiled_input(input_ids)
+                self.compiled_input_calls += 1
+            else:
+                values = self.embed_input_ids(input_ids) if inputs_embeds is None else inputs_embeds.reshape(-1, 5120)
+                residual = values.unsqueeze(1).expand(-1, 4, -1).contiguous()
+                del values
+                pre = torch.zeros(input_ids.numel(), 4, device=residual.device, dtype=torch.float32)
+                pre[:, 0] = 1
+            from vllm_gaudi.ops.deepseek_v41_device_loop import DeviceInputTransaction
+
+            if isinstance(self.step_ticket, DeviceInputTransaction):
+                inputs = self.device_decode_inputs()
+                engram = inputs.prepare(inputs.owner, input_ids, inputs.history_views[-1])
+            elif envs.VLLM_HPU_DSV41_V2_DEVICE_ENGRAM and self.step_use_replay and input_ids.numel() == 1:
+                layer1 = self.engram_host.consume_device_c1(self._step_request_id)
+                buffers = self.engram_host.wait(self.step_ticket)
+                engram = (layer1, buffers[1])
+                if envs.VLLM_HPU_DSV41_DEVICE_CLOSED_LOOP:
+                    engram = self.device_decode_inputs().stage_reference(engram)
+            else:
+                # The full TP4 prompt consumes the two tables at layers 1/14.
+                # Each consumer binds its own DMA dependency, allowing earlier
+                # layers to execute while the later host lookup is outstanding.
+                from vllm_gaudi.ops.deepseek_v41_prefill_sequence_state import can_sequence_prefill_state
+
+                if (
+                    self.tensor_parallel_size == 4
+                    and input_ids.numel() == 16384
+                    and not self.step_use_replay
+                    and self.program.start == 0
+                    and can_sequence_prefill_state(self.program, 16384)
+                ):
+                    engram = self.engram_host.defer_prefill(self.step_ticket)
+                else:
+                    engram = self.engram_host.wait(self.step_ticket)
+        else:
+            if intermediate_tensors is None:
+                raise RuntimeError("PP1 has no matching PP0 hidden/pre-mix generation")
+            pp_wire = intermediate_tensors.tensors.get("pp_wire")
+            if pp_wire is None:
+                residual, pre = intermediate_tensors["hidden_states"], intermediate_tensors["pre_mix"]
+            else:
+                residual = pre = None
+            engram = ()
+        if (envs.VLLM_HPU_DSV41_DEVICE_ROUNDS and self.program.dspark
+                and self.step_use_replay and input_ids.numel() == 6):
+            from vllm_gaudi.ops.deepseek_v41_math import unpack_swa
+
+            # Ordinary startup and request entry must bind the same BF16
+            # rows as the device producer used by subsequent rounds.
+            engram = tuple(row if row.dtype == torch.bfloat16 else unpack_swa(row, 256) for row in engram)
+        compiled_tp4 = self.tensor_parallel_size == 4 and 1 <= input_ids.numel() <= 6
+        if self.program.length > 512 and not self.step_use_replay and not compiled_tp4:
+            # Keep prompt geometries out of the shape-specialized compile
+            # cache in the 1M profile. Prefill preserves the scheduler chunk;
+            # its MoE and attention implementations own the
+            # bounded internal weight/index workspaces.
+            execute = self.program
+        else:
+            execute = self.program.replay_owner if self.native and self.step_use_replay else self.ordinary
+        timing = getattr(self, "verify_timing", None)
+        if timing:
+            # Inputs and Engram are already staged. These nonblocking device
+            # markers exclude frontend gaps from the target replay interval.
+            timing.device("target_native_start")
+        if tp4_prefix:
+            ids_signature, position_signature, residual, pre, generation, search = self._decode_prefix
+            if (
+                ids_signature != self._input_signature(input_ids)
+                or position_signature != self._input_signature(positions)
+                or generation != self.program.generation
+                or search != self.program.search_length
+            ):
+                raise RuntimeError("TP4 continuation input or physical-state generation changed")
+            output, pre, aux = self.ordinary.suffix(residual, pre, positions, input_ids, engram)
+            self._decode_prefix = None
+        elif self._decode_prefix is not None:
+            if not native_input or execute is not self.program.replay_owner:
+                raise RuntimeError("V4.1 segmented prefix reached an incompatible model invocation")
+            ids_signature, positions_signature = self._decode_prefix
+            if (
+                self._input_signature(input_ids) != ids_signature
+                or self._input_signature(positions) != positions_signature
+            ):
+                raise RuntimeError("V4.1 segmented prefix does not belong to this token/position generation")
+            output, pre, aux = execute.finish_segmented(positions, input_ids, engram)
+            self._decode_prefix = None
+        elif native_input:
+            if execute is not self.program.replay_owner:
+                raise RuntimeError("Native input requires its qualified replay stage")
+            output, pre, aux = execute.from_input_ids(positions, input_ids, engram)
+        elif pp_wire is not None or fused_text_io:
+            if execute is not self.program.replay_owner:
+                raise RuntimeError("PP wire input requires its qualified native stage")
+            output, pre, aux = execute(
+                residual, pre, positions, input_ids, engram, pp_wire=pp_wire, fused_text_io=fused_text_io
+            )
+        else:
+            if (
+                execute is self.program
+                and self.tensor_parallel_size == 4
+                and input_ids.numel() > 6
+                and (envs.VLLM_HPU_DSV41_PREFILL_GROUPED or envs.VLLM_HPU_DSV41_PREFILL_MXFP4)
+            ):
+                initial = PrefillInput(residual, pre)
+                del residual, pre
+                output, pre, aux = execute(initial, None, positions, input_ids, engram)
+            else:
+                output, pre, aux = execute(residual, pre, positions, input_ids, engram)
+        if timing:
+            timing.device("target_native_done")
+        self.last_aux = aux
+        if self.is_first_stage and not self.is_last_stage:
+            if fused_text_io:
+                return IntermediateTensors({"pp_wire": output})
+            return IntermediateTensors({"hidden_states": output, "pre_mix": pre})
+        return output
+
+    def forward_device_round(self, input_ids, positions, engram):
+        """Consume device-produced C6 inputs through the shared stage replay."""
+        if (not envs.VLLM_HPU_DSV41_DEVICE_ROUNDS or not self.program.dspark or not self.native
+                or not self.is_first_stage or not self.is_last_stage or input_ids.numel() != 6):
+            raise RuntimeError("Device round requires one native stage owning input and sampling")
+        fused = envs.VLLM_HPU_DSV41_FUSED_STAGE_IO
+        if fused:
+            residual = pre = None
+        else:
+            residual, pre = self.compiled_input(input_ids)
+        output, _, self.last_aux = self.program.replay_owner(
+            residual, pre, positions, input_ids, engram, fused_text_io=fused
+        )
+        return output
+
+    def compute_logits(self, hidden_states):
+        return self.program.logits(hidden_states)
+
+    def get_mtp_target_hidden_states(self):
+        return self.last_aux
+
+    def close(self):
+        self._decode_prefix = None
+        self._step_request_id = None
+        for replay in getattr(self, "batch_replay_lanes", ()):
+            replay.close()
+        self.program.invalidate()
+        if hasattr(self, "device_engram_inputs"):
+            self.device_engram_inputs.close()
+        if self.engram_host is not None:
+            self.engram_host.close()
+
+    def _apply(self, fn, recurse=True):
+        if hasattr(self, "program"):
+            self.program.invalidate()
+        result = super()._apply(fn, recurse)
+        self._bind_vision()
+        return result

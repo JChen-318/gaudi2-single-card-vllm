@@ -1,0 +1,81 @@
+from vllm.model_executor.models.registry import ModelRegistry
+
+
+def register_model():
+    ModelRegistry.register_model("DeepseekV41ForCausalLM", "vllm_gaudi.models.deepseek_v41:HpuDeepseekV41ForCausalLM")
+    ModelRegistry.register_model("DSparkV41DraftModel", "vllm_gaudi.models.deepseek_v41_program:PreparedDraft")
+    import vllm_gaudi.models.deepseek_v41_loader  # noqa: F401
+    from vllm_gaudi.models.gemma3_mm import HpuGemma3ForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model(
+        "Gemma3ForConditionalGeneration",  # Original architecture identifier in vLLM
+        "vllm_gaudi.models.gemma3_mm:HpuGemma3ForConditionalGeneration")
+
+    from vllm_gaudi.models.qwen2_5_vl import HpuQwen2_5_VLForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("Qwen2_5_VLForConditionalGeneration",
+                                 "vllm_gaudi.models.qwen2_5_vl:HpuQwen2_5_VLForConditionalGeneration")
+
+    from vllm_gaudi.models.ernie45_vl import HpuErnie4_5_VLMoeForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("Ernie4_5_VLMoeForConditionalGeneration",
+                                 "vllm_gaudi.models.ernie45_vl:HpuErnie4_5_VLMoeForConditionalGeneration")
+
+    from vllm_gaudi.models.ovis import HpuOvis  # noqa: F401
+    ModelRegistry.register_model("Ovis", "vllm_gaudi.models.ovis:HpuOvis")
+
+    from vllm_gaudi.models.qwen3_vl_moe import HpuQwen3_VLMoeForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("Qwen3VLMoeForConditionalGeneration",
+                                 "vllm_gaudi.models.qwen3_vl_moe:HpuQwen3_VLMoeForConditionalGeneration")
+
+    # HunYuanDenseV1ForCausalLM / HunYuanMoEV1ForCausalLM are intentionally not
+    # overridden here: upstream vLLM (#53615) deleted the native
+    # vllm.model_executor.models.hunyuan_v1 module our HPU subclasses derived
+    # from and now serves both architectures through the Transformers modeling
+    # backend. The override only added .contiguous() on the qk-norm reshape
+    # views of the deleted HunYuanAttention, so it has nothing left to
+    # specialize.
+
+    from vllm_gaudi.models.minimax_m2 import HpuMiniMaxM2ForCausalLM  # noqa: F401
+    ModelRegistry.register_model("MiniMaxM2ForCausalLM", "vllm_gaudi.models.minimax_m2:HpuMiniMaxM2ForCausalLM")
+
+    ModelRegistry.register_model("MiniMaxM3SparseForCausalLM",
+                                 "vllm_gaudi.models.minimax_m3:HpuMiniMaxM3SparseForCausalLM")
+    ModelRegistry.register_model("MiniMaxM3SparseForConditionalGeneration",
+                                 "vllm_gaudi.models.minimax_m3:HpuMiniMaxM3SparseForConditionalGeneration")
+    from vllm_gaudi.models.pixtral import HPUPixtralForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("PixtralForConditionalGeneration",
+                                 "vllm_gaudi.models.pixtral:HPUPixtralForConditionalGeneration")
+
+    from vllm_gaudi.models.dots_ocr import HpuDotsOCRForCausalLM  # noqa: F401
+    ModelRegistry.register_model("DotsOCRForCausalLM", "vllm_gaudi.models.dots_ocr:HpuDotsOCRForCausalLM")
+
+    from vllm_gaudi.models.seed_oss import HpuSeedOssForCausalLM  # noqa: F401
+    ModelRegistry.register_model("SeedOssForCausalLM", "vllm_gaudi.models.seed_oss:HpuSeedOssForCausalLM")
+
+    from vllm_gaudi.models.qwen3_moe import HpuQwen3MoeForCausalLM  # noqa: F401
+    ModelRegistry.register_model("Qwen3MoeForCausalLM", "vllm_gaudi.models.qwen3_moe:HpuQwen3MoeForCausalLM")
+
+    from vllm_gaudi.models.llama4 import HpuLlama4ForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("Llama4ForConditionalGeneration",
+                                 "vllm_gaudi.models.llama4:HpuLlama4ForConditionalGeneration")
+
+    from vllm_gaudi.models.gemma4 import HpuGemma4ForConditionalGeneration  # noqa: F401
+    ModelRegistry.register_model("Gemma4ForConditionalGeneration",
+                                 "vllm_gaudi.models.gemma4:HpuGemma4ForConditionalGeneration")
+
+    import vllm_gaudi.models.deepseek_v2  # noqa: F401
+
+    from vllm_gaudi.models.deepseek_ocr import HpuDeepseekOCRForCausalLM  # noqa: F401
+    ModelRegistry.register_model("DeepseekOCRForCausalLM", "vllm_gaudi.models.deepseek_ocr:HpuDeepseekOCRForCausalLM")
+
+    # Upstream vLLM migrated GPTBigCode/Starcoder2 to the Transformers modeling
+    # backend, which does not trace cleanly under HPU warmup/bucketing. Register
+    # the vendored native implementations so these architectures keep working on
+    # Gaudi (e.g. StarCoder, granite-*-code).
+    ModelRegistry.register_model("GPTBigCodeForCausalLM", "vllm_gaudi.models.gpt_bigcode:GPTBigCodeForCausalLM")
+    ModelRegistry.register_model("Starcoder2ForCausalLM", "vllm_gaudi.models.starcoder2:Starcoder2ForCausalLM")
+
+    import vllm_gaudi.models.gptoss_mxfp4  # noqa: F401
+    import vllm_gaudi.models.qwen3_next  # noqa: F401
+    import vllm_gaudi.models.qwen3_5  # noqa: F401
+    import vllm_gaudi.models.kimi_k25_vit  # noqa: F401
+    import vllm_gaudi.models.kimi_k25  # noqa: F401
+    import vllm_gaudi.models.gemma4_mm  # noqa: F401

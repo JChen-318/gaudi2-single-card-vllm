@@ -1,0 +1,1784 @@
+/**********************************************************************
+Copyright (c) 2024 Habana Labs.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+*   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+*   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+********************************************************************/
+
+#include "deepseek_v41_sampling_gaudi2.hpp"
+#include "deepseek_v41_expert_diagonal_shared_scale_gaudi2.hpp"
+#include "deepseek_v41_control_mme_finish_gaudi2.hpp"
+#include <cstring>
+#include <dlfcn.h>
+#include <initializer_list>
+#include "deepseek_v41_state_rows_gaudi2.hpp"
+#include "deepseek_v41_batch_mla_metadata_gaudi2.hpp"
+#include "deepseek_v41_prefill_mhc_gaudi2.hpp"
+#include "deepseek_v41_mhc_post_collapse_gaudi2.hpp"
+#include "deepseek_v41_mhc_gates_post_gaudi2.hpp"
+#include "deepseek_v41_mhc_weighted_stats_gaudi2.hpp"
+#include "deepseek_v41_mhc_post_collapse_f32_gaudi2.hpp"
+#include "deepseek_v41_index_gaudi2.hpp"
+#include "deepseek_v41_index_reduce_gaudi2.hpp"
+#include "deepseek_v41_index_keys_gaudi2.hpp"
+#include "deepseek_v41_prefill_main_decode_gaudi2.hpp"
+#include "deepseek_v41_candidate_gather_gaudi2.hpp"
+#include "deepseek_v41_prefill_flash_gaudi2.hpp"
+#include "deepseek_v41_prefill_sparse_mla_gaudi2.hpp"
+#include "deepseek_v41_route_pack_gaudi2.hpp"
+#include "deepseek_v41_reindex_compact_gaudi2.hpp"
+#include "deepseek_v41_index_tile_reduce_gaudi2.hpp"
+#include "deepseek_v41_quant_roundtrip_gaudi2.hpp"
+#include "deepseek_v41_expert_n256_gaudi2.hpp"
+#include "deepseek_v41_expert_token_wide_gaudi2.hpp"
+#include "deepseek_v41_expert_diagonal_scale_shared_gaudi2.hpp"
+#include "deepseek_v41_expert_paired_decode_fp8_gaudi2.hpp"
+#include "deepseek_v41_expert_silu_decode_fp8_gaudi2.hpp"
+#include "deepseek_v41_expert_slots3_sat_fp8_gaudi2.hpp"
+#include "deepseek_v41_expert_pair_silu_quant_gaudi2.hpp"
+#include "deepseek_v41_qkv_norm_publish_gaudi2.hpp"
+#include "deepseek_v41_peer_post_norm_quant_gaudi2.hpp"
+#include "deepseek_v41_woa_scale_dense_quant_gaudi2.hpp"
+#include "deepseek_v41_silu_tile_gaudi2.hpp"
+#include "deepseek_v41_prefill_permuted_gaudi2.hpp"
+#include "deepseek_v41_dynamic_quant_bf16_gaudi2.hpp"
+#include "deepseek_v41_ffn_norm_quant_gaudi2.hpp"
+#include "deepseek_v41_selected_mla_gaudi2.hpp"
+#include "deepseek_v41_selected_packed_mla_gaudi2.hpp"
+#include "deepseek_v41_paged_mla_gather_gaudi2.hpp"
+#include "deepseek_v41_logical_mla_gather_gaudi2.hpp"
+#include "deepseek_v41_main_publish_gather_gaudi2.hpp"
+#include "deepseek_v41_main_reuse_gather_gaudi2.hpp"
+
+#include "deepseek_v41_selected_kv_gaudi2.hpp"
+#include "deepseek_v41_head_attention_gaudi2.hpp"
+#include "deepseek_v41_kv_pack_gaudi2.hpp"
+#include "deepseek_v41_rope_gaudi2.hpp"
+#include "deepseek_v41_prefix_layout_gaudi2.hpp"
+#include "deepseek_v41_decode_coordinates_gaudi2.hpp"
+#include "deepseek_v41_decode_metadata_gaudi2.hpp"
+#include "deepseek_v41_candidate_coordinates_gaudi2.hpp"
+#include "deepseek_v41_ordered_peer_sum_gaudi2.hpp"
+#include "deepseek_v41_swa_pack_gaudi2.hpp"
+#include "deepseek_v41_fp4_pack_gaudi2.hpp"
+#include "deepseek_v41_csa2_prep_gaudi2.hpp"
+#include "deepseek_v41_compressor_pair_gaudi2.hpp"
+#include "deepseek_v41_compressor_batch_gaudi2.hpp"
+#include "deepseek_v41_decoded_kv_gaudi2.hpp"
+#include "deepseek_v41_control_gemv_gaudi2.hpp"
+#include "deepseek_v41_control_gemv_rrms_gaudi2.hpp"
+#include "deepseek_v41_engram_hash_gather_bf16_gaudi2.hpp"
+#include "deepseek_v41_engram_update_gaudi2.hpp"
+#include "deepseek_v41_mxfp4_prepared_dequant_fp8_gaudi2.hpp"
+#include "deepseek_v41_mla_gaudi2.hpp"
+#include "deepseek_v41_woa_gaudi2.hpp"
+#include "deepseek_v41_dense_gaudi2.hpp"
+#include "deepseek_v41_dense_pair_scale_gaudi2.hpp"
+#include "deepseek_v41_q_scale_rope_gaudi2.hpp"
+#include "deepseek_v41_prefill_q_scale_rope_gaudi2.hpp"
+#include "deepseek_v41_prefill_index_reduce_gaudi2.hpp"
+#include "deepseek_v41_prefill_topk_gaudi2.hpp"
+#include "deepseek_v41_qnorm_quant_gaudi2.hpp"
+#include "deepseek_v41_kv_norm_rope_gaudi2.hpp"
+#include "deepseek_v41_kv_norm_rope_publish_gaudi2.hpp"
+#include "deepseek_v41_attention_norm_gaudi2.hpp"
+#include "deepseek_v41_final_collapse_norm_gaudi2.hpp"
+#include "deepseek_v41_mhc_gates_gaudi2.hpp"
+#include "deepseek_v41_mhc_mme_gates_norm_gaudi2.hpp"
+#include "deepseek_v41_mhc_mme_post_collapse_gaudi2.hpp"
+#include "deepseek_v41_fp4_norm_rope_publish_gaudi2.hpp"
+#include "deepseek_v41_kv_norm_reuse_gather_gaudi2.hpp"
+#include "deepseek_v41_woa_stage_gaudi2.hpp"
+#include "deepseek_v41_router_top6_gaudi2.hpp"
+#include "deepseek_v41_router_logits_top6_gaudi2.hpp"
+#include "deepseek_v4_sparse_attn_bf16_gaudi2.hpp"
+#include "deepseek_v4_dequant_gather_bf16_gaudi2.hpp"
+#include "deepseek_v4_save_partial_states_f32_gaudi2.hpp"
+#include "deepseek_v4_save_compress_norm_c4_f32_gaudi2.hpp"
+#include "deepseek_v4_qnorm_rope_kv_pack_bf16_gaudi2.hpp"
+#include "deepseek_v4_insert_packed_kv_u8_gaudi2.hpp"
+#include "deepseek_v4_paged_sparse_attn_fp8_gaudi2.hpp"
+#include "deepseek_v4_flashmla_splitkv_gaudi2.hpp"
+#include "deepseek_v4_mxfp4_gather_u8_gaudi2.hpp"
+#include "deepseek_v4_mxfp4_dequant_fp8_gaudi2.hpp"
+#include "deepseek_v4_mxfp4_indexed_moe_gaudi2.hpp"
+#include "deepseek_v4_mxfp4_indexed_dequant_bf16_gaudi2.hpp"
+#include "deepseek_v4_mxfp4_prepared_dequant_bf16_gaudi2.hpp"
+#include "deepseek_v41_mxfp4_indexed_bf16_gaudi2.hpp"
+#include "deepseek_v4_bf16_identity_gaudi2.hpp"
+#include "deepseek_v4_mhc_gaudi2.hpp"
+#include "deepseek_v4_sinkhorn4_gaudi2.hpp"
+#include "deepseek_v4_topk_softplus_sqrt_gaudi2.hpp"
+#include "deepseek_v4_fill_short_topk_i32_gaudi2.hpp"
+
+enum KernelIndex {
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_Q_SCALE_ROPE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_INDEX_REDUCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_TOPK_THRESHOLD,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_TOPK_EMIT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_FLASH_KV,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_FLASH_MASK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_PERMUTED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MAIN_DECODE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_KV_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_EXP_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_NORMALIZE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_WRITE_U8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_WRITE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_WRITE_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_READ_U8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_READ_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_READ_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_COLLAPSE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_RRMS,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST_PREPARE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SWA_DECODED_WRITE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_DECODED_WRITE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DECODED_ATTN,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DECODED_ATTN_BLOCK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SWA_PAGED_DECODED_WRITE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_PAGED_DECODED_WRITE,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SPARSE_ATTN_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SPARSE_ATTN_BF16_LENGTHS,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_PAIRED_EXP,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_HEAD_PAIR,
+    GAUDI2_KERNEL_DEEPSEEK_V4_DEQUANT_GATHER_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_DUAL_DEQUANT_GATHER_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_LOCAL_DUAL_DEQUANT_GATHER_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_PARTIAL_STATES_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_F32_ORDERED,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_MIXED,
+    GAUDI2_KERNEL_DEEPSEEK_V4_QNORM_ROPE_KV_PACK_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_HYBRID_QNORM_ROPE_KV_PACK_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_INSERT_PACKED_KV_U8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_LOCAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_SEQUENTIAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_PAIR_SEQUENTIAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_QNORM_PAGED_SPARSE_ATTN_SEQUENTIAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SWA_ATTN_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_NATIVE_PAGED_SWA_ATTN_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_NATIVE_PAGED_SPARSE_ATTN_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_PARTIAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_PARTIAL_TILED_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_COMBINE,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_GATHER_U8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_DEQUANT_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_FC1,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_FC2,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_GATE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_GATE_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_UP_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_UP_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V4_BF16_IDENTITY,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MHC_POST_PREPARE,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MHC_PRE_EMIT,
+    GAUDI2_KERNEL_DEEPSEEK_V4_MHC_PRE_EMIT_NORM,
+    GAUDI2_KERNEL_DEEPSEEK_V4_SINKHORN4,
+    GAUDI2_KERNEL_DEEPSEEK_V4_TOPK_SOFTPLUS_SQRT,
+    GAUDI2_KERNEL_DEEPSEEK_V4_FILL_SHORT_TOPK_I32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_K128_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_K128_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_PIPE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_BF16_IDENTITY,
+    GAUDI2_KERNEL_DEEPSEEK_V41_QUANT_ROUNDTRIP_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_QUANT_ROUNDTRIP_WIDE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC1_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC1_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC2_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC2_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_ORDERED_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_CACHE_ORDERED_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VALID_ORDERED_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VALID_CACHE_ORDERED_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_ORDERED_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_CACHE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_C1_INDICES_I32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_PAIR_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_BATCH_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_BATCH_GATHER_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_CACHE_WRITE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SWA_PACK_WRITE_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_GEMV_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_BATCH4_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_PREFETCH_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES_POSITIVE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_GEMV_RRMS_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_ROPE_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_PRODUCT_ROPE_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_ROUNDTRIP,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_ROUNDTRIP_WIDE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROUTER_TOP6,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROUTER_LOGITS_TOP6,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_STAGE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SELECTED_PREFIX_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SOFTMAX,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SHARED_KV,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_EXP_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MLA_NORMALIZE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_SCALE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DIAGONAL_SHARED_SCALE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_PAIR_SCALE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ATTENTION_NORM,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FINAL_COLLAPSE_NORM,
+    GAUDI2_KERNEL_DEEPSEEK_V41_Q_SCALE_ROPE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_Q_SCALE_ROPE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_QNORM_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ATTENTION_NORM_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_ROPE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_MME_GATES_NORM,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_MME_POST_COLLAPSE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_PAIRED_DECODE_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SILU_DECODE_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SLOTS3_SAT_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_PAIR_SILU_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_FLAT_SILU_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_QKV_NORM_PUBLISH,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PEER_POST_NORM_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_DENSE_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_NORM_ROPE_PUBLISH,
+    GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_REUSE_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_SHARED_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_SHARED_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_K128_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_K128_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_PACKED_EXP,
+    GAUDI2_KERNEL_DEEPSEEK_V41_VECTOR_KV_SCALES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_N512_DEQUANT_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_N512_DEQUANT_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ATTN_SCORES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ATTN_RECURRENCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ATTN_VALUES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SWA_PACK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_PACK_G16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_PACK_G32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FP4_ROUNDTRIP_G32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROPE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROPE_INVERSE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_ROPE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_ROPE_INVERSE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFIX_LAYOUT_R1,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PREFIX_LAYOUT_R2,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SAT_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SAT_SLOTS6,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_SAT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_UNROLL,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_UNROLL,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_ALIGNED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_ACTIVE_K,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SILU_ACTIVE_K,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_SAT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_DIAGONAL_SCALE_SHARED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE_SAT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_ROPE_PUBLISH,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SLOTS_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_REUSE_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_HORIZONTAL_FP8,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_NORMAL_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SCALE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SILU_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_N256_SCALE_REDUCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SCALE_SHARED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DYNAMIC_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_DUAL_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_DUAL_BF16_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_UNPACK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_MLA_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_PACKED_MLA_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_PACKED_MLA_VECTOR,
+    GAUDI2_KERNEL_DEEPSEEK_V41_PAGED_MLA_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_LOGICAL_MLA_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_LOGICAL_MLA_VECTOR,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_MLA_SOFTMAX,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ENGRAM_HASH_GATHER_BF16,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_SCORES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_THRESHOLD,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_EMIT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_SCORES_DECODED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_KEYS,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_KEYS_TILED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_REINDEX_COMPACT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_REDUCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_TILE_REDUCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_ORDER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_PACK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_REDUCE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_BATCH_MLA_METADATA,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_GATHER,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_VECTOR,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_VECTOR_MASK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_VECTOR,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_VECTOR_MASK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_NATIVE_CODEC,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_DECODED_SWA,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_NATIVE_CODEC,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_TENSOR_MASK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_WEIGHTED_STATS,
+    GAUDI2_KERNEL_DEEPSEEK_V41_NORM_WEIGHTED_STATS,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES_POST,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_COLLAPSE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_COLLAPSE_F32,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SILU_ACTIVATE_TILE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SILU_QUANT_TILE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SHARED_SILU_QUANT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ENGRAM_UPDATE,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DECODE_COORDINATES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_DECODE_METADATA,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_COORDINATES,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_COORDINATES_GLOBAL,
+    GAUDI2_KERNEL_DEEPSEEK_V41_ORDERED_PEER_SUM,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_MME_FINISH,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_PARALLEL,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_BF16_WEIGHT,
+    GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_SWIZZLED,
+    GAUDI2_KERNEL_DEEPSEEK_V41_MHC_RRMS_POST,
+    GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_QUERY_ROPE_FP4,
+    GAUDI2_KERNEL_DEEPSEEK_V41_REGISTER_SOFTMAX,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SAMPLING_UNPACK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SAMPLING_MASK,
+    GAUDI2_KERNEL_DEEPSEEK_V41_SAMPLING_SELECT,
+    KERNEL_COUNT
+};
+
+namespace {
+void* stock_library() {
+    static void* handle = dlopen("/usr/lib/habanalabs/libtpc_kernels.so", RTLD_NOW | RTLD_LOCAL);
+    return handle;
+}
+template<typename Function> Function stock_symbol(const char* name) {
+    void* handle = stock_library();
+    return handle ? reinterpret_cast<Function>(dlsym(handle, name)) : nullptr;
+}
+bool custom_guid(const char* name) {
+    constexpr char prefix[] = "custom_deepseek_v4_";
+    constexpr char v41Prefix[] = "custom_deepseek_v41_";
+    return std::strncmp(name, prefix, sizeof(prefix) - 1) == 0 ||
+           std::strncmp(name, v41Prefix, sizeof(v41Prefix) - 1) == 0;
+}
+}
+
+namespace tpc_lib_api {
+// The optional manipulation payload is opaque here: stock kernels forward it
+// unchanged, while custom kernels keep their explicitly qualified layout.
+struct _TensorManipulationSuggestion;
+}
+
+extern "C" {
+uint64_t GetLibVersion() {
+    auto stock = stock_symbol<tpc_lib_api::pfnGetLibVersion>("GetLibVersion");
+    return stock ? stock() : 0;
+}
+
+tpc_lib_api::GlueCodeReturn GetSuggestedManipulation(
+    const tpc_lib_api::HabanaKernelParams* params,
+    tpc_lib_api::_TensorManipulationSuggestion* suggestion) {
+    if (!params || !suggestion) return tpc_lib_api::GLUE_FAILED;
+    if (custom_guid(params->guid.name))
+        return tpc_lib_api::GLUE_FAILED;
+    auto stock = stock_symbol<decltype(&GetSuggestedManipulation)>("GetSuggestedManipulation");
+    return stock ? stock(params, suggestion) : tpc_lib_api::GLUE_FAILED;
+}
+
+tpc_lib_api::GlueCodeReturn GetSupportedDataLayouts(
+    const tpc_lib_api::HabanaKernelParams* params,
+    tpc_lib_api::NodeDataLayouts* layouts, uint32_t* count) {
+    if (!params || !count) return tpc_lib_api::GLUE_FAILED;
+    if (custom_guid(params->guid.name)) {
+        *count = 1;
+        if (layouts) {
+            // An explicit don't-care layout matches the optional-interface
+            // default. Zero layouts is a compilation failure in Synapse 1.16.
+            for (uint32_t i = 0; i < layouts->inputTensorNr; ++i)
+                std::memset(layouts->inputs[i].layout, 'x', sizeof(layouts->inputs[i].layout));
+            for (uint32_t i = 0; i < layouts->outputTensorNr; ++i)
+                std::memset(layouts->outputs[i].layout, 'x', sizeof(layouts->outputs[i].layout));
+            for (uint32_t i = 0; i < layouts->shapeTensorNr; ++i)
+                std::memset(layouts->shapeTensors[i].layout, 'x', sizeof(layouts->shapeTensors[i].layout));
+        }
+        return tpc_lib_api::GLUE_SUCCESS;
+    }
+    auto stock = stock_symbol<tpc_lib_api::pfnGetSupportedDataLayout>("GetSupportedDataLayouts");
+    return stock ? stock(params, layouts, count) : tpc_lib_api::GLUE_FAILED;
+}
+
+tpc_lib_api::GlueCodeReturn GetKernelGuids(tpc_lib_api::DeviceId deviceId,
+    uint32_t* kernelCount, tpc_lib_api::GuidInfo* guids) {
+    if (!kernelCount) return tpc_lib_api::GLUE_FAILED;
+    auto stock = stock_symbol<decltype(&GetKernelGuids)>("GetKernelGuids");
+    if (!stock) return tpc_lib_api::GLUE_FAILED;
+    if (deviceId != tpc_lib_api::DEVICE_ID_GAUDI2) return stock(deviceId, kernelCount, guids);
+    uint32_t stock_count = 0;
+    auto status = stock(deviceId, &stock_count, nullptr);
+    if (status != tpc_lib_api::GLUE_SUCCESS) return status;
+    const uint32_t capacity = *kernelCount;
+    *kernelCount = KERNEL_COUNT + stock_count;
+    if (!guids || capacity == 0) return tpc_lib_api::GLUE_SUCCESS;
+    if (capacity < *kernelCount) return tpc_lib_api::GLUE_FAILED;
+    std::memset(guids, 0, KERNEL_COUNT * sizeof(*guids));
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_RRMS_POST].name, "custom_deepseek_v41_mhc_rrms_post_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_SWIZZLED].name, "custom_deepseek_v41_control_rrms_swizzled_bf16_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_PARALLEL].name, "custom_deepseek_v41_control_rrms_parallel_bf16_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_BF16_WEIGHT].name, "custom_deepseek_v41_control_rrms_bf16_weight_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_MME_FINISH].name, DeepseekV41ControlMmeFinishGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_BATCH_MLA_METADATA].name,
+                DeepseekV41BatchMlaMetadataGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_PERMUTED].name, DeepseekV41PrefillPermutedGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MAIN_DECODE].name,
+                DeepseekV41PrefillMainDecodeGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_FLASH_KV].name,
+                DeepseekV41PrefillFlashGaudi2::kv_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_FLASH_MASK].name,
+                DeepseekV41PrefillFlashGaudi2::mask_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_GATHER].name,
+                DeepseekV41CandidateGatherGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST].name, DeepseekV41PrefillMhcGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_COLLAPSE].name, DeepseekV41PrefillMhcCollapseGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_RRMS].name, DeepseekV41PrefillMhcRrmsGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST_PREPARE].name, DeepseekV41PrefillMhcPostPrepareGaudi2::name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::DeadBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_BF16].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::DeadNormalBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_NORMAL_BF16].name);
+    for (auto mode : {DeepseekV41DecodedKVGaudi2::SWA_WRITE,
+                      DeepseekV41DecodedKVGaudi2::FP4_WRITE,
+                      DeepseekV41DecodedKVGaudi2::ATTENTION,
+                      DeepseekV41DecodedKVGaudi2::ATTENTION_BLOCK,
+                      DeepseekV41DecodedKVGaudi2::SWA_PAGED_WRITE,
+                      DeepseekV41DecodedKVGaudi2::FP4_PAGED_WRITE}) {
+        DeepseekV41DecodedKVGaudi2 decoded(mode);
+        decoded.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SWA_DECODED_WRITE + mode].name);
+    }
+    DeepseekV4SparseAttnBF16Gaudi2 pairedExp(DeepseekV4SparseAttnBF16Gaudi2::PAIRED_EXP_LENGTHS);
+    pairedExp.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_PAIRED_EXP].name);
+    DeepseekV4SparseAttnBF16Gaudi2 headPair(DeepseekV4SparseAttnBF16Gaudi2::HEAD_PAIR_LENGTHS);
+    headPair.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_HEAD_PAIR].name);
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 legacyK128(
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_K128);
+    legacyK128.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_K128_BF16].name);
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 legacyK128Normal(
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_K128, true);
+    legacyK128Normal.GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_K128_NORMAL_BF16].name);
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 legacyPipeline(
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_PIPELINE, true);
+    legacyPipeline.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_PIPE_BF16].name);
+    DeepseekV41SelectedKVGaudi2 selectedOrdered(1), selectedCacheOrdered(2);
+    selectedOrdered.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_ORDERED_BF16].name);
+    selectedCacheOrdered.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_CACHE_ORDERED_BF16].name);
+    DeepseekV41SelectedKVGaudi2 selectedValid(1, true), selectedValidCache(2, true);
+    selectedValid.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VALID_ORDERED_BF16].name);
+    selectedValidCache.GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VALID_CACHE_ORDERED_BF16].name);
+    DeepseekV41SelectedKVGaudi2 selectedVector(0, false, true), selectedVectorOrdered(1, true, true),
+        selectedVectorCache(2, true, true);
+    selectedVector.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_BF16].name);
+    selectedVectorOrdered.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_ORDERED_BF16].name);
+    selectedVectorCache.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_VEC_CACHE_BF16].name);
+    DeepseekV41Csa2PrepGaudi2 c1Indices(false);
+    c1Indices.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_C1_INDICES_I32].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_PAIR_BF16].name,
+                DeepseekV41CompressorPairGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_BATCH_BF16].name,
+                DeepseekV41CompressorBatchGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_COMPRESSOR_BATCH_GATHER_F32].name,
+                DeepseekV41CompressorBatchGaudi2::gatherName);
+    DeepseekV41Fp4PackGaudi2 fp4Write(0);
+    fp4Write.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FP4_CACHE_WRITE_BF16].name);
+    DeepseekV41SwaPackGaudi2 swaWrite(true);
+    swaWrite.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SWA_PACK_WRITE_BF16].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_ORDER].name, DeepseekV41RoutePackGaudi2(2).name());
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_PACK].name,
+                DeepseekV41RoutePackGaudi2().name());
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROUTE_REDUCE].name,
+                DeepseekV41RoutePackGaudi2(true).name());
+    DeepseekV41ControlGemvGaudi2 controlGemv;
+    controlGemv.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_GEMV_F32].name);
+    DeepseekV41ControlGemvGaudi2(true).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_BATCH4_F32].name);
+    DeepseekV41ControlGemvGaudi2(false, true).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_PREFETCH_F32].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES_POSITIVE].name, "custom_deepseek_v41_mhc_gates_positive_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_GEMV_RRMS_BF16].name,
+                DeepseekV41ControlGemvRrmsGaudi2::name);
+    DeepseekV41EngramHashGatherBf16Gaudi2 engramHashGather;
+    engramHashGather.GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_ENGRAM_HASH_GATHER_BF16].name);
+    DeepseekV41Mxfp4PreparedDequantFP8Gaudi2 preparedFp8;
+    preparedFp8.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_FP8].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ATTENTION_NORM].name, DeepseekV41AttentionNormGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ENGRAM_UPDATE].name, DeepseekV41EngramUpdateGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FINAL_COLLAPSE_NORM].name,
+                DeepseekV41FinalCollapseNormGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_Q_SCALE_ROPE].name, DeepseekV41QScaleRopeGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_INDEX_REDUCE].name,
+                DeepseekV41PrefillIndexReduceGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_TOPK_THRESHOLD].name,
+                DeepseekV41PrefillTopkGaudi2::threshold_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_TOPK_EMIT].name,
+                DeepseekV41PrefillTopkGaudi2::emit_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_Q_SCALE_ROPE].name,
+                DeepseekV41PrefillQScaleRopeGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_Q_SCALE_ROPE_BF16].name,
+                DeepseekV41PrefillQScaleRopeGaudi2::bf16_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_QNORM_QUANT].name, DeepseekV41QNormQuantGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ATTENTION_NORM_QUANT].name,
+                DeepseekV41QNormQuantGaudi2::attention_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_ROPE].name,
+                DeepseekV41KVNormRopeGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES].name, DeepseekV41MhcGatesGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_MME_GATES_NORM].name, DeepseekV41MhcMmeGatesNormGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_MME_POST_COLLAPSE].name, DeepseekV41MhcMmePostCollapseGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_PAIRED_DECODE_FP8].name, DeepseekV41ExpertPairedDecodeFp8Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SILU_DECODE_FP8].name, DeepseekV41ExpertSiluDecodeFp8Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SLOTS3_SAT_FP8].name, DeepseekV41ExpertSlots3SatFp8Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_FLAT_SILU_QUANT].name, DeepseekV41ExpertPairSiluQuantGaudi2::flat_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_PAIR_SILU_QUANT].name, DeepseekV41ExpertPairSiluQuantGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_QKV_NORM_PUBLISH].name, DeepseekV41QkvNormPublishGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PEER_POST_NORM_QUANT].name, DeepseekV41PeerPostNormQuantGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_DENSE_QUANT].name, DeepseekV41WoaScaleDenseQuantGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FP4_NORM_ROPE_PUBLISH].name, DeepseekV41Fp4NormRopePublishGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_REUSE_GATHER].name, DeepseekV41KvNormReuseGatherGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_QUANT].name, DeepseekV41DenseGaudi2::quant_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_SCALE].name, DeepseekV41DenseGaudi2::scale_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DIAGONAL_SHARED_SCALE].name,DeepseekV41ExpertDiagonalSharedScaleGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DENSE_PAIR_SCALE].name,
+                DeepseekV41DensePairScaleGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_QUANT].name, DeepseekV41WoaGaudi2::quant_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_ROPE_QUANT].name,
+                DeepseekV41WoaGaudi2::rope_quant_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_PRODUCT_ROPE_QUANT].name,
+                DeepseekV41WoaGaudi2::product_rope_quant_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE].name, DeepseekV41WoaGaudi2::scale_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_ROUNDTRIP].name,
+                DeepseekV41WoaGaudi2::scale_roundtrip_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_SCALE_ROUNDTRIP_WIDE].name,
+                DeepseekV41WoaGaudi2::scale_roundtrip_wide_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROUTER_TOP6].name, DeepseekV41RouterTop6Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROUTER_LOGITS_TOP6].name,
+                DeepseekV41RouterLogitsTop6Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_WOA_STAGE].name, DeepseekV41WoaStageGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_GATHER].name, DeepseekV41MlaGaudi2::gather_name);
+    std::strcpy(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SELECTED_PREFIX_GATHER].name,
+        DeepseekV41MlaGaudi2::selected_prefix_gather_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SOFTMAX].name, DeepseekV41MlaGaudi2::softmax_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_SHARED_KV].name, DeepseekV41MlaGaudi2::shared_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_EXP_BF16].name, DeepseekV41MlaGaudi2::exp_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MLA_NORMALIZE].name, DeepseekV41MlaNormalizeGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_KV_NORM_ROPE_PUBLISH].name, DeepseekV41KVNormRopePublishGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_ACTIVE_K].name, DeepseekV41ExpertTokenWideGaudi2::active_k_name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SiluActiveKQuant).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_SILU_ACTIVE_K].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_SAT].name, DeepseekV41ExpertTokenWideGaudi2::three_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE3_UNROLL].name, DeepseekV41ExpertTokenWideGaudi2::unroll3_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_ALIGNED].name, DeepseekV41ExpertTokenWideGaudi2::aligned_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_UNROLL].name, DeepseekV41ExpertTokenWideGaudi2::unroll6_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_DIAGONAL_SCALE_SHARED].name, DeepseekV41ExpertDiagonalScaleSharedGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE6_SAT].name, DeepseekV41ExpertTokenWideGaudi2::six_name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8SatSlots6).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SAT_SLOTS6].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_TOKEN_WIDE_SAT].name, DeepseekV41ExpertTokenWideGaudi2::name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Sat).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SAT_FP8].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::ScaleReduceShared).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_EXPERT_SCALE_SHARED].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_FP8].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Slots).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SLOTS_FP8].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Horizontal).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_HORIZONTAL_FP8].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Reuse).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_REUSE_FP8].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::BF16).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_BF16].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::NormalBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_NORMAL_BF16].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::Scale).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SCALE].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SiluQuant).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SILU_QUANT].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SharedSiluQuant).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_SHARED_SILU_QUANT].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::ScaleReduce).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_SCALE_REDUCE].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DYNAMIC_QUANT].name, DeepseekV41DynamicQuantBf16Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_QUANT].name,
+                DeepseekV41FfnNormQuantGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CONTROL_RRMS_UNPACK].name,
+                "custom_deepseek_v41_control_rrms_unpack_bf16_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_DUAL_BF16_QUANT].name,
+                "custom_deepseek_v41_ffn_norm_dual_bf16_quant_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_FFN_NORM_DUAL_QUANT].name,
+                "custom_deepseek_v41_ffn_norm_dual_quant_gaudi2");
+    for(unsigned i=0;i<4;++i)
+        std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_SCORES+i].name,DeepseekV41IndexGaudi2::names[i]);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_KEYS].name,
+                DeepseekV41IndexKeysGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_KEYS_TILED].name,
+                DeepseekV41IndexKeysGaudi2::tiled_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MAIN_DECODE].name,
+                DeepseekV41PrefillMainDecodeGaudi2::name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::NormalBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_NORMAL_BF16].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::DeadBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_BF16].name);
+    DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::DeadNormalBF16).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_N256_DEAD_NORMAL_BF16].name);
+    for (unsigned i = 0; i < 6; ++i)
+        std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_WRITE_U8 + i].name, DeepseekV41StateRowsGaudi2::names[i]);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST].name, DeepseekV41PrefillMhcGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_WEIGHTED_STATS].name,"custom_deepseek_v41_mhc_post_weighted_stats_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_NORM_WEIGHTED_STATS].name,"custom_deepseek_v41_norm_from_weighted_stats_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_GATES_POST].name,DeepseekV41MhcGatesPostGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_COLLAPSE].name, DeepseekV41MhcPostCollapseGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SILU_ACTIVATE_TILE].name, DeepseekV41SiluActivateTileGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SILU_QUANT_TILE].name, DeepseekV41SiluQuantTileGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MHC_POST_COLLAPSE_F32].name, DeepseekV41MhcPostCollapseF32Gaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_COLLAPSE].name, DeepseekV41PrefillMhcCollapseGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_RRMS].name, DeepseekV41PrefillMhcRrmsGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_MHC_POST_PREPARE].name, DeepseekV41PrefillMhcPostPrepareGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_REDUCE].name,
+                DeepseekV41IndexReduceGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_REINDEX_COMPACT].name,DeepseekV41ReindexCompactGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_TILE_REDUCE].name,DeepseekV41IndexTileReduceGaudi2::name);
+    for(unsigned i=0;i<6;++i) std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_STATE_ROWS_WRITE_U8+i].name,DeepseekV41StateRowsGaudi2::names[i]);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_PACKED_MLA_GATHER].name, DeepseekV41SelectedPackedMlaGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_PACKED_MLA_VECTOR].name, DeepseekV41SelectedPackedMlaGaudi2::vector_name);
+    DeepseekV41SelectedMlaGaudi2(true).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_MLA_GATHER].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PAGED_MLA_GATHER].name, DeepseekV41PagedMlaGatherGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_LOGICAL_MLA_GATHER].name, DeepseekV41LogicalMlaGatherGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_LOGICAL_MLA_VECTOR].name, DeepseekV41LogicalMlaGatherGaudi2::vector_name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_GATHER].name, DeepseekV41MainPublishGatherGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_VECTOR_MASK].name, "custom_deepseek_v41_main_publish_vector_mask_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_NATIVE_CODEC].name, "custom_deepseek_v41_main_publish_native_codec_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_TENSOR_MASK].name, "custom_deepseek_v41_main_publish_tensor_mask_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_PUBLISH_VECTOR].name, "custom_deepseek_v41_main_publish_vector_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_VECTOR_MASK].name, "custom_deepseek_v41_main_reuse_vector_mask_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_NATIVE_CODEC].name, "custom_deepseek_v41_main_reuse_native_codec_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_DECODED_SWA].name, "custom_deepseek_v41_main_reuse_decoded_swa_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_VECTOR].name, "custom_deepseek_v41_main_reuse_vector_gaudi2");
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MAIN_REUSE_GATHER].name, DeepseekV41MainReuseGatherGaudi2::name);
+
+    DeepseekV41SelectedMlaGaudi2(false).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_MLA_SOFTMAX].name);
+    DeepseekV41PrefillSparseMlaGaudi2(DeepseekV41PrefillSparseMlaGaudi2::Gather).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_KV_BF16].name);
+    DeepseekV41PrefillSparseMlaGaudi2(DeepseekV41PrefillSparseMlaGaudi2::Exp).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_EXP_BF16].name);
+    DeepseekV41PrefillSparseMlaGaudi2(DeepseekV41PrefillSparseMlaGaudi2::Normalize).GetKernelName(
+        guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_SPARSE_NORMALIZE_BF16].name);
+
+           DeepseekV4SparseAttnBF16Gaudi2 sparseAttnInstance;
+           sparseAttnInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_SPARSE_ATTN_BF16].name);
+           DeepseekV4SparseAttnBF16Gaudi2 sparseAttnLengthsInstance(
+               DeepseekV4SparseAttnBF16Gaudi2::EXPLICIT_LENGTHS);
+           sparseAttnLengthsInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_SPARSE_ATTN_BF16_LENGTHS]
+                   .name);
+           DeepseekV4SparseAttnBF16Gaudi2 packedExpInstance(
+               DeepseekV4SparseAttnBF16Gaudi2::PACKED_EXP_LENGTHS);
+           packedExpInstance.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SPARSE_ATTN_PACKED_EXP].name);
+           DeepseekV4DequantGatherBF16Gaudi2 dequantGatherInstance;
+           dequantGatherInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_DEQUANT_GATHER_BF16].name);
+           DeepseekV4DequantGatherBF16Gaudi2 dualDequantGatherInstance(
+               DeepseekV4DequantGatherBF16Gaudi2::DUAL);
+           dualDequantGatherInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_DUAL_DEQUANT_GATHER_BF16]
+                   .name);
+           DeepseekV4DequantGatherBF16Gaudi2 localDualDequantGatherInstance(
+               DeepseekV4DequantGatherBF16Gaudi2::LOCAL_DUAL);
+           localDualDequantGatherInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_LOCAL_DUAL_DEQUANT_GATHER_BF16]
+                   .name);
+           DeepseekV4SavePartialStatesF32Gaudi2 savePartialStatesInstance;
+           savePartialStatesInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_PARTIAL_STATES_F32].name);
+           DeepseekV4SaveCompressNormC4F32Gaudi2 saveCompressNormInstance;
+           saveCompressNormInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_F32].name);
+           DeepseekV4SaveCompressNormC4F32Gaudi2
+               saveCompressNormOrderedInstance(
+                   DeepseekV4SaveCompressNormC4F32Gaudi2::ORDERED_F32);
+           saveCompressNormOrderedInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_F32_ORDERED]
+                   .name);
+           DeepseekV4SaveCompressNormC4F32Gaudi2
+               saveCompressNormBF16Instance(
+                   DeepseekV4SaveCompressNormC4F32Gaudi2::BF16_CONSTANTS);
+           saveCompressNormBF16Instance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_BF16]
+                   .name);
+           DeepseekV4SaveCompressNormC4F32Gaudi2
+               saveCompressNormMixedInstance(
+                   DeepseekV4SaveCompressNormC4F32Gaudi2::MIXED_CONSTANTS);
+           saveCompressNormMixedInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_SAVE_COMPRESS_NORM_C4_MIXED]
+                   .name);
+           DeepseekV4QnormRopeKvPackBF16Gaudi2 qnormRopeKvPackInstance;
+           qnormRopeKvPackInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_QNORM_ROPE_KV_PACK_BF16].name);
+           DeepseekV4QnormRopeKvPackBF16Gaudi2 hybridQnormRopeKvPackInstance(
+               DeepseekV4QnormRopeKvPackBF16Gaudi2::HYBRID_FP8_BF16_Q);
+           hybridQnormRopeKvPackInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_HYBRID_QNORM_ROPE_KV_PACK_BF16]
+                   .name);
+           DeepseekV4InsertPackedKvU8Gaudi2 insertPackedKvInstance;
+           insertPackedKvInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_INSERT_PACKED_KV_U8].name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnInstance;
+           pagedSparseAttnInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_FP8].name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnLocalInstance(
+               DeepseekV4PagedSparseAttnFP8Gaudi2::LOCAL_BLOCK_TABLE);
+           pagedSparseAttnLocalInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_LOCAL_FP8]
+                   .name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnSequentialInstance(
+               DeepseekV4PagedSparseAttnFP8Gaudi2::SEQUENTIAL_BLOCK_TABLE);
+           pagedSparseAttnSequentialInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_SEQUENTIAL_FP8]
+                   .name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2
+               pagedSparseAttnPairSequentialInstance(
+                   DeepseekV4PagedSparseAttnFP8Gaudi2::
+                       PAIR_SEQUENTIAL_BLOCK_TABLE);
+           pagedSparseAttnPairSequentialInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SPARSE_ATTN_PAIR_SEQUENTIAL_FP8]
+                   .name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2
+               qnormPagedSparseAttnSequentialInstance(
+                   DeepseekV4PagedSparseAttnFP8Gaudi2::
+                       QNORM_SEQUENTIAL_BLOCK_TABLE);
+           qnormPagedSparseAttnSequentialInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_QNORM_PAGED_SPARSE_ATTN_SEQUENTIAL_FP8]
+                   .name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSwaAttnInstance(
+               DeepseekV4PagedSparseAttnFP8Gaudi2::SWA_ONLY);
+           pagedSwaAttnInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_PAGED_SWA_ATTN_FP8]
+                   .name);
+           DeepseekV4FlashMLASplitKVPartialFP8Gaudi2
+               flashmlaSplitKVPartialInstance;
+           DeepseekV4PagedSparseAttnFP8Gaudi2 nativeSwa(
+               DeepseekV4PagedSparseAttnFP8Gaudi2::SWA_ONLY, true);
+           nativeSwa.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V4_NATIVE_PAGED_SWA_ATTN_FP8].name);
+           DeepseekV4PagedSparseAttnFP8Gaudi2 nativeSparse(
+               DeepseekV4PagedSparseAttnFP8Gaudi2::GLOBAL_SLOTS, true);
+           nativeSparse.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V4_NATIVE_PAGED_SPARSE_ATTN_FP8].name);
+           flashmlaSplitKVPartialInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_PARTIAL_FP8]
+                   .name);
+           DeepseekV4FlashMLASplitKVTiledPartialFP8Gaudi2
+               flashmlaSplitKVTiledPartialInstance;
+           flashmlaSplitKVTiledPartialInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_PARTIAL_TILED_FP8]
+                   .name);
+           DeepseekV4FlashMLASplitKVCombineGaudi2
+               flashmlaSplitKVCombineInstance;
+           flashmlaSplitKVCombineInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_FLASHMLA_SPLITKV_COMBINE]
+                   .name);
+           DeepseekV4Mxfp4GatherU8Gaudi2 mxfp4GatherInstance;
+           mxfp4GatherInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_GATHER_U8].name);
+           DeepseekV4Mxfp4DequantFp8Gaudi2 mxfp4DequantFp8Instance;
+           mxfp4DequantFp8Instance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_DEQUANT_FP8]
+                   .name);
+           DeepseekV4Mxfp4IndexedMoeGaudi2 mxfp4IndexedFc1Instance(
+               DeepseekV4Mxfp4IndexedMoeGaudi2::FC1);
+           mxfp4IndexedFc1Instance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_FC1]
+                   .name);
+           DeepseekV4Mxfp4IndexedMoeGaudi2 mxfp4IndexedFc2Instance(
+               DeepseekV4Mxfp4IndexedMoeGaudi2::FC2);
+           mxfp4IndexedFc2Instance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_FC2]
+                   .name);
+           DeepseekV4MHCPostPrepareGaudi2 mhcPostPrepareInstance;
+           DeepseekV4Mxfp4IndexedDequantBF16Gaudi2 indexedDequantInstance;
+           indexedDequantInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4IndexedDequantBF16Gaudi2 indexedDequantNormalInstance(true);
+           indexedDequantNormalInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_INDEXED_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantInstance;
+           preparedDequantInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantNormalInstance(true);
+           preparedDequantNormalInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantGateInstance(false, 0);
+           preparedDequantGateInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_GATE_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantGateNormalInstance(true, 0);
+           preparedDequantGateNormalInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_GATE_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantUpInstance(false, 1);
+           preparedDequantUpInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_UP_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantUpNormalInstance(true, 1);
+           preparedDequantUpNormalInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MXFP4_PREPARED_DEQUANT_UP_NORMAL_BF16].name);
+           DeepseekV4BF16IdentityGaudi2 bf16IdentityInstance;
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedV41(false, -1, true);
+           preparedV41.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedV41Normal(true, -1, true);
+           preparedV41Normal.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_PREPARED_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 sharedV41(false, -1, true, true);
+           sharedV41.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_SHARED_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 sharedV41Normal(true, -1, true, true);
+           sharedV41Normal.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_SHARED_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 tiledV41(false, -1, true, false, true);
+           tiledV41.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_K128_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 tiledV41Normal(true, -1, true, false, true);
+           tiledV41Normal.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_K128_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 n512V41(false, -1, true, false, true, true);
+           n512V41.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_N512_DEQUANT_BF16].name);
+           DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 n512V41Normal(true, -1, true, false, true, true);
+           n512V41Normal.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_N512_DEQUANT_NORMAL_BF16].name);
+           DeepseekV4BF16IdentityGaudi2 v41Identity(true);
+           v41Identity.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_BF16_IDENTITY].name);
+           DeepseekV41QuantRoundtripGaudi2 v41QuantRoundtrip;
+           v41QuantRoundtrip.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_QUANT_ROUNDTRIP_BF16].name);
+           DeepseekV41QuantRoundtripGaudi2 v41QuantRoundtripWide(true);
+           v41QuantRoundtripWide.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_QUANT_ROUNDTRIP_WIDE_BF16].name);
+           DeepseekV41SelectedKVGaudi2 v41SelectedKV;
+           v41SelectedKV.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SELECTED_KV_BF16].name);
+           DeepseekV41Mxfp4IndexedBF16Gaudi2 v41IndexedFc1(
+               DeepseekV41Mxfp4IndexedBF16Gaudi2::FC1, false);
+           v41IndexedFc1.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC1_BF16].name);
+           DeepseekV41Mxfp4IndexedBF16Gaudi2 v41IndexedFc1Normal(
+               DeepseekV41Mxfp4IndexedBF16Gaudi2::FC1, true);
+           v41IndexedFc1Normal.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC1_NORMAL_BF16].name);
+           DeepseekV41Mxfp4IndexedBF16Gaudi2 v41IndexedFc2(
+               DeepseekV41Mxfp4IndexedBF16Gaudi2::FC2, false);
+           v41IndexedFc2.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC2_BF16].name);
+           DeepseekV41Mxfp4IndexedBF16Gaudi2 v41IndexedFc2Normal(
+               DeepseekV41Mxfp4IndexedBF16Gaudi2::FC2, true);
+           v41IndexedFc2Normal.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V41_MXFP4_INDEXED_FC2_NORMAL_BF16].name);
+           bf16IdentityInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_BF16_IDENTITY].name);
+           mhcPostPrepareInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MHC_POST_PREPARE].name);
+           DeepseekV4MHCPreEmitGaudi2 mhcPreEmitInstance;
+           mhcPreEmitInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MHC_PRE_EMIT].name);
+           DeepseekV4MHCPreEmitNormGaudi2 mhcPreEmitNormInstance;
+           mhcPreEmitNormInstance.GetKernelName(
+               guids[GAUDI2_KERNEL_DEEPSEEK_V4_MHC_PRE_EMIT_NORM].name);
+           DeepseekV4TopkSoftplusSqrtGaudi2 routerTopkInstance;
+           DeepseekV4Sinkhorn4Gaudi2 sinkhornInstance;
+           sinkhornInstance.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V4_SINKHORN4].name);
+           routerTopkInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_TOPK_SOFTPLUS_SQRT]
+                   .name);
+           DeepseekV4FillShortTopkI32Gaudi2 fillShortTopkInstance;
+           fillShortTopkInstance.GetKernelName(
+               guids[
+                   GAUDI2_KERNEL_DEEPSEEK_V4_FILL_SHORT_TOPK_I32]
+                   .name);
+    DeepseekV41SelectedKVGaudi2 vectorScales(0, false, false, true);
+    vectorScales.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_VECTOR_KV_SCALES].name);
+    for (int phase = 0; phase < 3; ++phase) {
+        DeepseekV41HeadAttentionGaudi2 part(phase);
+        part.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ATTN_SCORES + phase].name);
+    }
+    constexpr unsigned codec_modes[] = {0, 16, 32, DeepseekV41KVPackGaudi2::FP4_ROUNDTRIP_G32};
+    for (int mode = 0; mode < 4; ++mode) {
+        DeepseekV41KVPackGaudi2 part(codec_modes[mode]);
+        part.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SWA_PACK + mode].name);
+    }
+    DeepseekV41RopeGaudi2(false, false, true).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_INDEX_QUERY_ROPE_FP4].name);
+    for (int inverse = 0; inverse < 2; ++inverse) {
+        DeepseekV41RopeGaudi2 part(inverse);
+        part.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ROPE + inverse].name);
+        DeepseekV41RopeGaudi2 prefill_part(inverse, true);
+        prefill_part.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFILL_ROPE + inverse].name);
+    }
+    for (int ratio = 1; ratio <= 2; ++ratio) {
+        DeepseekV41PrefixLayoutGaudi2 part(ratio);
+        part.GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_PREFIX_LAYOUT_R1 + ratio - 1].name);
+    }
+    DeepseekV41OrderedPeerSumGaudi2().GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_ORDERED_PEER_SUM].name);
+    DeepseekV41DecodeCoordinatesGaudi2().GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DECODE_COORDINATES].name);
+    DeepseekV41DecodeMetadataGaudi2().GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_DECODE_METADATA].name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_COORDINATES].name, DeepseekV41CandidateCoordinatesGaudi2::name);
+    std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_CANDIDATE_COORDINATES_GLOBAL].name, DeepseekV41CandidateCoordinatesGaudi2::global_name);
+    DeepseekV41SelectedMlaGaudi2(false,true).GetKernelName(guids[GAUDI2_KERNEL_DEEPSEEK_V41_REGISTER_SOFTMAX].name);
+    for(unsigned mode=0;mode<3;++mode)
+        std::strcpy(guids[GAUDI2_KERNEL_DEEPSEEK_V41_SAMPLING_UNPACK+mode].name,DeepseekV41SamplingGaudi2::names[mode]);
+    return stock(deviceId, &stock_count, guids + KERNEL_COUNT);
+}
+
+tpc_lib_api::GlueCodeReturn InstantiateTpcKernel(tpc_lib_api::HabanaKernelParams* params,
+    tpc_lib_api::HabanaKernelInstantiation* instance) {
+    if (!params || !instance) return tpc_lib_api::GLUE_FAILED;
+    char kernelName[tpc_lib_api::MAX_NODE_NAME];
+    for(unsigned mode=0;mode<3;++mode)
+        if(std::strcmp(params->guid.name,DeepseekV41SamplingGaudi2::names[mode])==0)
+            return DeepseekV41SamplingGaudi2(mode).GetGcDefinitions(params,instance);
+    if (std::strcmp(params->guid.name, DeepseekV41OrderedPeerSumGaudi2::name) == 0)
+        return DeepseekV41OrderedPeerSumGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41CandidateCoordinatesGaudi2::global_name) == 0)
+        return DeepseekV41CandidateCoordinatesGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41CandidateCoordinatesGaudi2::name) == 0)
+        return DeepseekV41CandidateCoordinatesGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41DecodeMetadataGaudi2::name) == 0)
+        return DeepseekV41DecodeMetadataGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41DecodeCoordinatesGaudi2::name) == 0)
+        return DeepseekV41DecodeCoordinatesGaudi2().GetGcDefinitions(params, instance);
+    for (auto mode : {DeepseekV41DecodedKVGaudi2::SWA_WRITE,
+                      DeepseekV41DecodedKVGaudi2::FP4_WRITE,
+                      DeepseekV41DecodedKVGaudi2::ATTENTION,
+                      DeepseekV41DecodedKVGaudi2::ATTENTION_BLOCK,
+                      DeepseekV41DecodedKVGaudi2::SWA_PAGED_WRITE,
+                      DeepseekV41DecodedKVGaudi2::FP4_PAGED_WRITE}) {
+        DeepseekV41DecodedKVGaudi2 decoded(mode);
+        decoded.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0)
+            return decoded.GetGcDefinitions(params, instance);
+    }
+    for (auto mode : {DeepseekV4SparseAttnBF16Gaudi2::PAIRED_EXP_LENGTHS,
+                      DeepseekV4SparseAttnBF16Gaudi2::HEAD_PAIR_LENGTHS}) {
+        DeepseekV4SparseAttnBF16Gaudi2 attention(mode);
+        attention.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0)
+            return attention.GetGcDefinitions(params, instance);
+    }
+    for (auto mode : {DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_K128,
+                      DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_PIPELINE}) {
+        for (bool normal : {false, true}) {
+            if (mode == DeepseekV4Mxfp4PreparedDequantBF16Gaudi2::LEGACY_PIPELINE && !normal) continue;
+            DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 decoder(mode, normal);
+            decoder.GetKernelName(kernelName);
+            if (std::strcmp(params->guid.name, kernelName) == 0)
+                return decoder.GetGcDefinitions(params, instance);
+        }
+    }
+    for (unsigned order : {0u, 1u, 2u}) {
+        for (bool vector : {false, true}) {
+            DeepseekV41SelectedKVGaudi2 selected(order, order != 0 && vector, vector);
+            selected.GetKernelName(kernelName);
+            if (std::strcmp(params->guid.name, kernelName) == 0)
+                return selected.GetGcDefinitions(params, instance);
+        }
+        if (order != 0) {
+            DeepseekV41SelectedKVGaudi2 selected(order, true);
+            selected.GetKernelName(kernelName);
+            if (std::strcmp(params->guid.name, kernelName) == 0)
+                return selected.GetGcDefinitions(params, instance);
+        }
+    }
+    DeepseekV41Csa2PrepGaudi2 c1Indices(false);
+    c1Indices.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return c1Indices.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41CompressorPairGaudi2::name) == 0)
+        return DeepseekV41CompressorPairGaudi2().GetGcDefinitions(
+            params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41CompressorBatchGaudi2::name) == 0)
+        return DeepseekV41CompressorBatchGaudi2().GetGcDefinitions(
+            params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41CompressorBatchGaudi2::gatherName) == 0)
+        return DeepseekV41CompressorBatchGaudi2(true).GetGcDefinitions(
+            params, instance);
+    DeepseekV41Fp4PackGaudi2 fp4Write(0);
+    fp4Write.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return fp4Write.GetGcDefinitions(params, instance);
+    DeepseekV41SwaPackGaudi2 swaWrite(true);
+    swaWrite.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return swaWrite.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41RoutePackGaudi2(2).name()) == 0)
+        return DeepseekV41RoutePackGaudi2(2).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41RoutePackGaudi2().name()) == 0)
+        return DeepseekV41RoutePackGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41RoutePackGaudi2(true).name()) == 0)
+        return DeepseekV41RoutePackGaudi2(true).GetGcDefinitions(params, instance);
+    DeepseekV41ControlGemvGaudi2 controlGemv;
+    controlGemv.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return controlGemv.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_control_batch4_f32_gaudi2") == 0)
+        return DeepseekV41ControlGemvGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_control_prefetch_f32_gaudi2") == 0)
+        return DeepseekV41ControlGemvGaudi2(false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    "custom_deepseek_v41_control_rrms_unpack_bf16_gaudi2") == 0)
+        return DeepseekV41ControlGemvRrmsGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41ControlGemvRrmsGaudi2::name) == 0)
+        return DeepseekV41ControlGemvRrmsGaudi2().GetGcDefinitions(
+            params, instance);
+    DeepseekV41EngramHashGatherBf16Gaudi2 engramHashGather;
+    engramHashGather.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return engramHashGather.GetGcDefinitions(params, instance);
+    DeepseekV41Mxfp4PreparedDequantFP8Gaudi2 preparedFp8;
+    preparedFp8.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return preparedFp8.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41EngramUpdateGaudi2::name) == 0)
+        return DeepseekV41EngramUpdateGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41AttentionNormGaudi2::name) == 0)
+        return DeepseekV41AttentionNormGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41FinalCollapseNormGaudi2::name) == 0)
+        return DeepseekV41FinalCollapseNormGaudi2().GetGcDefinitions(
+            params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41QScaleRopeGaudi2::name) == 0)
+        return DeepseekV41QScaleRopeGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillIndexReduceGaudi2::name) == 0)
+        return DeepseekV41PrefillIndexReduceGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillTopkGaudi2::threshold_name) == 0)
+        return DeepseekV41PrefillTopkGaudi2(false).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillTopkGaudi2::emit_name) == 0)
+        return DeepseekV41PrefillTopkGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillQScaleRopeGaudi2::name) == 0)
+        return DeepseekV41PrefillQScaleRopeGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillQScaleRopeGaudi2::bf16_name) == 0)
+        return DeepseekV41PrefillQScaleRopeGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41QNormQuantGaudi2::name) == 0 ||
+        std::strcmp(params->guid.name, DeepseekV41QNormQuantGaudi2::attention_name) == 0)
+        return DeepseekV41QNormQuantGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41KVNormRopeGaudi2::name) == 0)
+        return DeepseekV41KVNormRopeGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41DenseGaudi2::quant_name) == 0)
+        return DeepseekV41DenseGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertDiagonalSharedScaleGaudi2::name) == 0)
+        return DeepseekV41ExpertDiagonalSharedScaleGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41DenseGaudi2::scale_name) == 0)
+        return DeepseekV41DenseGaudi2(false).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41DensePairScaleGaudi2::name) == 0)
+        return DeepseekV41DensePairScaleGaudi2().GetGcDefinitions(params,
+                                                                  instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::quant_name) == 0)
+        return DeepseekV41WoaGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::rope_quant_name) == 0)
+        return DeepseekV41WoaGaudi2(true, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::product_rope_quant_name) == 0)
+        return DeepseekV41WoaGaudi2(true, true, false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::scale_name) == 0)
+        return DeepseekV41WoaGaudi2(false).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::scale_roundtrip_wide_name) == 0)
+        return DeepseekV41WoaGaudi2(false, false, true, false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaGaudi2::scale_roundtrip_name) == 0)
+        return DeepseekV41WoaGaudi2(false, false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41RouterTop6Gaudi2::name) == 0)
+        return DeepseekV41RouterTop6Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41RouterLogitsTop6Gaudi2::name) == 0)
+        return DeepseekV41RouterLogitsTop6Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaStageGaudi2::name) == 0)
+        return DeepseekV41WoaStageGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MlaGaudi2::gather_name) == 0)
+        return DeepseekV41MlaGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,
+                    DeepseekV41MlaGaudi2::selected_prefix_gather_name) == 0)
+        return DeepseekV41MlaGaudi2(true, false, true)
+            .GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MlaGaudi2::softmax_name) == 0)
+        return DeepseekV41MlaGaudi2(false).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MlaGaudi2::shared_name) == 0)
+        return DeepseekV41MlaGaudi2(true, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MlaGaudi2::exp_name) == 0)
+        return DeepseekV41MlaGaudi2(false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MlaNormalizeGaudi2::name) == 0)
+        return DeepseekV41MlaNormalizeGaudi2().GetGcDefinitions(params, instance);
+    for (int ratio = 1; ratio <= 2; ++ratio) {
+        DeepseekV41PrefixLayoutGaudi2 part(ratio);
+        part.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) return part.GetGcDefinitions(params, instance);
+    }
+    DeepseekV41RopeGaudi2 indexQueryCodec(false, false, true);
+    indexQueryCodec.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return indexQueryCodec.GetGcDefinitions(params, instance);
+    for (int inverse = 0; inverse < 2; ++inverse) {
+        DeepseekV41RopeGaudi2 part(inverse);
+        part.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) return part.GetGcDefinitions(params, instance);
+        DeepseekV41RopeGaudi2 prefill_part(inverse, true);
+        prefill_part.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) return prefill_part.GetGcDefinitions(params, instance);
+    }
+    for (unsigned mode : {0u, 16u, 32u, DeepseekV41KVPackGaudi2::FP4_ROUNDTRIP_G32}) {
+        DeepseekV41KVPackGaudi2 part(mode);
+        part.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) return part.GetGcDefinitions(params, instance);
+    }
+    for (int phase = 0; phase < 3; ++phase) {
+        DeepseekV41HeadAttentionGaudi2 part(phase);
+        part.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) return part.GetGcDefinitions(params, instance);
+    }
+    DeepseekV41SelectedKVGaudi2 vectorScales(0, false, false, true);
+    vectorScales.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return vectorScales.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41KVNormRopePublishGaudi2::name) == 0)
+        return DeepseekV41KVNormRopePublishGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,"custom_deepseek_v41_mhc_gates_positive_gaudi2") == 0)
+        return DeepseekV41MhcGatesGaudi2(true).GetGcDefinitions(params,instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::unroll3_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(3, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::aligned_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(6, true, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::unroll6_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(6, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::active_k_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(3, false, false, true).GetGcDefinitions(params, instance);
+    auto activeSilu = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SiluActiveKQuant);
+    char activeSiluName[tpc_lib_api::MAX_NODE_NAME];
+    activeSilu.GetKernelName(activeSiluName);
+    if (std::strcmp(params->guid.name, activeSiluName) == 0)
+        return activeSilu.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::three_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(3).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertDiagonalScaleSharedGaudi2::name) == 0)
+        return DeepseekV41ExpertDiagonalScaleSharedGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::six_name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2(6).GetGcDefinitions(params, instance);
+    auto sixSlots = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8SatSlots6);
+    sixSlots.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return sixSlots.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2().GetGcDefinitions(params, instance);
+    auto sat = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Sat);
+    sat.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return sat.GetGcDefinitions(params, instance);
+    auto sharedScale = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::ScaleReduceShared);
+    sharedScale.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return sharedScale.GetGcDefinitions(params, instance);
+    auto mainFast0 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8, true);
+    mainFast0.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast0.GetGcDefinitions(params, instance);
+    auto horizontal = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Horizontal);
+    horizontal.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return horizontal.GetGcDefinitions(params, instance);
+    auto reuseSlots = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Reuse);
+    reuseSlots.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return reuseSlots.GetGcDefinitions(params, instance);
+    auto mainFastSlots = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Slots);
+    mainFastSlots.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFastSlots.GetGcDefinitions(params, instance);
+    auto mainFast1 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::BF16);
+    mainFast1.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast1.GetGcDefinitions(params, instance);
+    auto normalBf16 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::NormalBF16);
+    normalBf16.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return normalBf16.GetGcDefinitions(params, instance);
+    auto mainFast2 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::Scale);
+    mainFast2.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast2.GetGcDefinitions(params, instance);
+    auto mainFast3 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SiluQuant);
+    mainFast3.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast3.GetGcDefinitions(params, instance);
+    auto sharedSilu = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::SharedSiluQuant);
+    sharedSilu.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return sharedSilu.GetGcDefinitions(params, instance);
+    auto mainFast4 = DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::ScaleReduce);
+    mainFast4.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast4.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41KvNormReuseGatherGaudi2::name) == 0)
+        return DeepseekV41KvNormReuseGatherGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41Fp4NormRopePublishGaudi2::name) == 0)
+        return DeepseekV41Fp4NormRopePublishGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcMmeGatesNormGaudi2::name) == 0)
+        return DeepseekV41MhcMmeGatesNormGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcGatesGaudi2::name) == 0)
+        return DeepseekV41MhcGatesGaudi2().GetGcDefinitions(params, instance);
+    auto mainFastDynamicQuant = DeepseekV41DynamicQuantBf16Gaudi2();
+    if (std::strcmp(params->guid.name, DeepseekV41DynamicQuantBf16Gaudi2::name) == 0)
+        return mainFastDynamicQuant.GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_ffn_norm_dual_bf16_quant_gaudi2") == 0)
+        return DeepseekV41FfnNormQuantGaudi2(2).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_ffn_norm_dual_quant_gaudi2") == 0)
+        return DeepseekV41FfnNormQuantGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41FfnNormQuantGaudi2::name) == 0)
+        return DeepseekV41FfnNormQuantGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PagedMlaGatherGaudi2::name) == 0)
+        return DeepseekV41PagedMlaGatherGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_publish_tensor_mask_gaudi2") == 0)
+        return DeepseekV41MainPublishGatherGaudi2(true, false, false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_publish_native_codec_gaudi2") == 0)
+        return DeepseekV41MainPublishGatherGaudi2(true, true, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_publish_vector_mask_gaudi2") == 0)
+        return DeepseekV41MainPublishGatherGaudi2(true,true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_publish_vector_gaudi2") == 0)
+        return DeepseekV41MainPublishGatherGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MainPublishGatherGaudi2::name) == 0)
+        return DeepseekV41MainPublishGatherGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_reuse_decoded_swa_gaudi2") == 0)
+        return DeepseekV41MainReuseGatherGaudi2(true, true, false, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_reuse_native_codec_gaudi2") == 0)
+        return DeepseekV41MainReuseGatherGaudi2(true, true, true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_reuse_vector_mask_gaudi2") == 0)
+        return DeepseekV41MainReuseGatherGaudi2(true,true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_main_reuse_vector_gaudi2") == 0)
+        return DeepseekV41MainReuseGatherGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MainReuseGatherGaudi2::name) == 0)
+        return DeepseekV41MainReuseGatherGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertTokenWideGaudi2::name) == 0)
+        return DeepseekV41ExpertTokenWideGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_expert_n256_sat_fp8_gaudi2") == 0)
+        return DeepseekV41ExpertN256Gaudi2(DeepseekV41ExpertN256Gaudi2::FP8Sat).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41LogicalMlaGatherGaudi2::name) == 0)
+        return DeepseekV41LogicalMlaGatherGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41LogicalMlaGatherGaudi2::vector_name) == 0)
+        return DeepseekV41LogicalMlaGatherGaudi2(true).GetGcDefinitions(params, instance);
+    auto mainFast5 = DeepseekV41SelectedMlaGaudi2(true);
+    mainFast5.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast5.GetGcDefinitions(params, instance);
+    auto registerSoftmax=DeepseekV41SelectedMlaGaudi2(false,true);
+    registerSoftmax.GetKernelName(kernelName);
+    if(std::strcmp(params->guid.name,kernelName)==0)return registerSoftmax.GetGcDefinitions(params,instance);
+    auto mainFast6 = DeepseekV41SelectedMlaGaudi2(false);
+    mainFast6.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return mainFast6.GetGcDefinitions(params, instance);
+    for (auto kind : {DeepseekV41PrefillSparseMlaGaudi2::Gather,
+                      DeepseekV41PrefillSparseMlaGaudi2::Exp,
+                      DeepseekV41PrefillSparseMlaGaudi2::Normalize}) {
+        auto candidate = DeepseekV41PrefillSparseMlaGaudi2(kind);
+        candidate.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0)
+            return candidate.GetGcDefinitions(params, instance);
+    }
+    DeepseekV41SelectedKVGaudi2 selectedKV;
+    selectedKV.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return selectedKV.GetGcDefinitions(params, instance);
+    DeepseekV4SparseAttnBF16Gaudi2 packedExpInstance(
+        DeepseekV4SparseAttnBF16Gaudi2::PACKED_EXP_LENGTHS);
+    packedExpInstance.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0) {
+        return packedExpInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4SparseAttnBF16Gaudi2 sparseAttnInstance;
+    sparseAttnInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return sparseAttnInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4SparseAttnBF16Gaudi2 sparseAttnLengthsInstance(
+        DeepseekV4SparseAttnBF16Gaudi2::EXPLICIT_LENGTHS);
+    sparseAttnLengthsInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return sparseAttnLengthsInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4DequantGatherBF16Gaudi2 dequantGatherInstance;
+    dequantGatherInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return dequantGatherInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4DequantGatherBF16Gaudi2 dualDequantGatherInstance(
+        DeepseekV4DequantGatherBF16Gaudi2::DUAL);
+    dualDequantGatherInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return dualDequantGatherInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4DequantGatherBF16Gaudi2 localDualDequantGatherInstance(
+        DeepseekV4DequantGatherBF16Gaudi2::LOCAL_DUAL);
+    localDualDequantGatherInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return localDualDequantGatherInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4SavePartialStatesF32Gaudi2 savePartialStatesInstance;
+    savePartialStatesInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return savePartialStatesInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4SaveCompressNormC4F32Gaudi2 saveCompressNormInstance;
+    saveCompressNormInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return saveCompressNormInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4SaveCompressNormC4F32Gaudi2 saveCompressNormOrderedInstance(
+        DeepseekV4SaveCompressNormC4F32Gaudi2::ORDERED_F32);
+    saveCompressNormOrderedInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return saveCompressNormOrderedInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4SaveCompressNormC4F32Gaudi2 saveCompressNormBF16Instance(
+        DeepseekV4SaveCompressNormC4F32Gaudi2::BF16_CONSTANTS);
+    saveCompressNormBF16Instance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return saveCompressNormBF16Instance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4SaveCompressNormC4F32Gaudi2 saveCompressNormMixedInstance(
+        DeepseekV4SaveCompressNormC4F32Gaudi2::MIXED_CONSTANTS);
+    saveCompressNormMixedInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return saveCompressNormMixedInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4QnormRopeKvPackBF16Gaudi2 qnormRopeKvPackInstance;
+    qnormRopeKvPackInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return qnormRopeKvPackInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4QnormRopeKvPackBF16Gaudi2 hybridQnormRopeKvPackInstance(
+        DeepseekV4QnormRopeKvPackBF16Gaudi2::HYBRID_FP8_BF16_Q);
+    hybridQnormRopeKvPackInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return hybridQnormRopeKvPackInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4InsertPackedKvU8Gaudi2 insertPackedKvInstance;
+    insertPackedKvInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return insertPackedKvInstance.GetGcDefinitions(params, instance);
+    }
+
+    for (auto mode : {DeepseekV4PagedSparseAttnFP8Gaudi2::SWA_ONLY,
+                      DeepseekV4PagedSparseAttnFP8Gaudi2::GLOBAL_SLOTS}) {
+        DeepseekV4PagedSparseAttnFP8Gaudi2 functionalAttention(mode, true);
+        functionalAttention.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0) {
+            return functionalAttention.GetGcDefinitions(params, instance);
+        }
+    }
+    DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnInstance;
+    pagedSparseAttnInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return pagedSparseAttnInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnLocalInstance(
+        DeepseekV4PagedSparseAttnFP8Gaudi2::LOCAL_BLOCK_TABLE);
+    pagedSparseAttnLocalInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return pagedSparseAttnLocalInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSparseAttnSequentialInstance(
+        DeepseekV4PagedSparseAttnFP8Gaudi2::SEQUENTIAL_BLOCK_TABLE);
+    pagedSparseAttnSequentialInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return pagedSparseAttnSequentialInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4PagedSparseAttnFP8Gaudi2
+        pagedSparseAttnPairSequentialInstance(
+            DeepseekV4PagedSparseAttnFP8Gaudi2::
+                PAIR_SEQUENTIAL_BLOCK_TABLE);
+    pagedSparseAttnPairSequentialInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return pagedSparseAttnPairSequentialInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4PagedSparseAttnFP8Gaudi2
+        qnormPagedSparseAttnSequentialInstance(
+            DeepseekV4PagedSparseAttnFP8Gaudi2::
+                QNORM_SEQUENTIAL_BLOCK_TABLE);
+    qnormPagedSparseAttnSequentialInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return qnormPagedSparseAttnSequentialInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4PagedSparseAttnFP8Gaudi2 pagedSwaAttnInstance(
+        DeepseekV4PagedSparseAttnFP8Gaudi2::SWA_ONLY);
+    pagedSwaAttnInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return pagedSwaAttnInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4FlashMLASplitKVPartialFP8Gaudi2
+        flashmlaSplitKVPartialInstance;
+    flashmlaSplitKVPartialInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return flashmlaSplitKVPartialInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4FlashMLASplitKVTiledPartialFP8Gaudi2
+        flashmlaSplitKVTiledPartialInstance;
+    flashmlaSplitKVTiledPartialInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return flashmlaSplitKVTiledPartialInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4FlashMLASplitKVCombineGaudi2 flashmlaSplitKVCombineInstance;
+    flashmlaSplitKVCombineInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return flashmlaSplitKVCombineInstance.GetGcDefinitions(
+            params, instance);
+    }
+
+    DeepseekV4Mxfp4GatherU8Gaudi2 mxfp4GatherInstance;
+    mxfp4GatherInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mxfp4GatherInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4Mxfp4DequantFp8Gaudi2 mxfp4DequantFp8Instance;
+    mxfp4DequantFp8Instance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mxfp4DequantFp8Instance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4Mxfp4IndexedMoeGaudi2 mxfp4IndexedFc1Instance(
+        DeepseekV4Mxfp4IndexedMoeGaudi2::FC1);
+    mxfp4IndexedFc1Instance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mxfp4IndexedFc1Instance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4Mxfp4IndexedMoeGaudi2 mxfp4IndexedFc2Instance(
+        DeepseekV4Mxfp4IndexedMoeGaudi2::FC2);
+    mxfp4IndexedFc2Instance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mxfp4IndexedFc2Instance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4Mxfp4IndexedDequantBF16Gaudi2 indexedDequantInstance;
+    indexedDequantInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return indexedDequantInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4IndexedDequantBF16Gaudi2 indexedDequantNormalInstance(true);
+    indexedDequantNormalInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return indexedDequantNormalInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantInstance;
+    preparedDequantInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantNormalInstance(true);
+    preparedDequantNormalInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantNormalInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantGateInstance(false, 0);
+    preparedDequantGateInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantGateInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantGateNormalInstance(true, 0);
+    preparedDequantGateNormalInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantGateNormalInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantUpInstance(false, 1);
+    preparedDequantUpInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantUpInstance.GetGcDefinitions(params, instance);
+    }
+    DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedDequantUpNormalInstance(true, 1);
+    preparedDequantUpNormalInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return preparedDequantUpNormalInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4BF16IdentityGaudi2 bf16IdentityInstance;
+    DeepseekV4BF16IdentityGaudi2 v41Identity(true);
+    DeepseekV41QuantRoundtripGaudi2 v41QuantRoundtrip;
+    v41QuantRoundtrip.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return v41QuantRoundtrip.GetGcDefinitions(params, instance);
+    DeepseekV41QuantRoundtripGaudi2 v41QuantRoundtripWide(true);
+    v41QuantRoundtripWide.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0)
+        return v41QuantRoundtripWide.GetGcDefinitions(params, instance);
+    for (auto stage : {DeepseekV41Mxfp4IndexedBF16Gaudi2::FC1,
+                       DeepseekV41Mxfp4IndexedBF16Gaudi2::FC2}) {
+        for (bool normal : {false, true}) {
+            DeepseekV41Mxfp4IndexedBF16Gaudi2 indexed(stage, normal);
+            indexed.GetKernelName(kernelName);
+            if (std::strcmp(params->guid.name, kernelName) == 0)
+                return indexed.GetGcDefinitions(params, instance);
+        }
+    }
+    v41Identity.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+        return v41Identity.GetGcDefinitions(params, instance);
+    for (bool normal : {false, true}) {
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 sharedV41(normal, -1, true, true);
+        sharedV41.GetKernelName(kernelName);
+        if (strcmp(params->guid.name, kernelName) == 0)
+            return sharedV41.GetGcDefinitions(params, instance);
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 tiledV41(normal, -1, true, false, true);
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 n512V41(normal, -1, true, false, true, true);
+        n512V41.GetKernelName(kernelName);
+        if (std::strcmp(params->guid.name, kernelName) == 0)
+            return n512V41.GetGcDefinitions(params, instance);
+        tiledV41.GetKernelName(kernelName);
+        if (strcmp(params->guid.name, kernelName) == 0)
+            return tiledV41.GetGcDefinitions(params, instance);
+        DeepseekV4Mxfp4PreparedDequantBF16Gaudi2 preparedV41(normal, -1, true);
+        preparedV41.GetKernelName(kernelName);
+        if (strcmp(params->guid.name, kernelName) == 0)
+            return preparedV41.GetGcDefinitions(params, instance);
+    }
+    bf16IdentityInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0) {
+        return bf16IdentityInstance.GetGcDefinitions(params, instance);
+    }
+
+    for(unsigned i=0;i<4;++i)
+        if(std::strcmp(params->guid.name,DeepseekV41IndexGaudi2::names[i])==0)
+            return DeepseekV41IndexGaudi2(i).GetGcDefinitions(params,instance);
+    if (std::strcmp(params->guid.name, DeepseekV41IndexKeysGaudi2::tiled_name) == 0)
+        return DeepseekV41IndexKeysGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41SelectedPackedMlaGaudi2::name) == 0)
+        return DeepseekV41SelectedPackedMlaGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41SelectedPackedMlaGaudi2::vector_name) == 0)
+        return DeepseekV41SelectedPackedMlaGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41IndexKeysGaudi2::name) == 0)
+        return DeepseekV41IndexKeysGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillMainDecodeGaudi2::name) == 0)
+        return DeepseekV41PrefillMainDecodeGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillPermutedGaudi2::name) == 0)
+        return DeepseekV41PrefillPermutedGaudi2().GetGcDefinitions(params, instance);
+    for (auto mode : {DeepseekV41ExpertN256Gaudi2::NormalBF16, DeepseekV41ExpertN256Gaudi2::DeadBF16,
+                      DeepseekV41ExpertN256Gaudi2::DeadNormalBF16}) {
+        DeepseekV41ExpertN256Gaudi2 decoder(mode);
+        char name[tpc_lib_api::MAX_NODE_NAME];
+        decoder.GetKernelName(name);
+        if (std::strcmp(params->guid.name, name) == 0)
+            return decoder.GetGcDefinitions(params, instance);
+    }
+    if (std::strcmp(params->guid.name, DeepseekV41BatchMlaMetadataGaudi2::name) == 0)
+        return DeepseekV41BatchMlaMetadataGaudi2().GetGcDefinitions(params, instance);
+    for (unsigned i = 0; i < 6; ++i)
+        if (std::strcmp(params->guid.name, DeepseekV41StateRowsGaudi2::names[i]) == 0)
+            return DeepseekV41StateRowsGaudi2(i).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcPostCollapseF32Gaudi2::name) == 0)
+        return DeepseekV41MhcPostCollapseF32Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41SiluActivateTileGaudi2::name) == 0)
+        return DeepseekV41SiluActivateTileGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41SiluQuantTileGaudi2::name) == 0)
+        return DeepseekV41SiluQuantTileGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41WoaScaleDenseQuantGaudi2::name) == 0)
+        return DeepseekV41WoaScaleDenseQuantGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PeerPostNormQuantGaudi2::name) == 0)
+        return DeepseekV41PeerPostNormQuantGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41QkvNormPublishGaudi2::name) == 0)
+        return DeepseekV41QkvNormPublishGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertPairSiluQuantGaudi2::flat_name) == 0)
+        return DeepseekV41ExpertPairSiluQuantGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertPairSiluQuantGaudi2::name) == 0)
+        return DeepseekV41ExpertPairSiluQuantGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertSlots3SatFp8Gaudi2::name) == 0)
+        return DeepseekV41ExpertSlots3SatFp8Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertSiluDecodeFp8Gaudi2::name) == 0)
+        return DeepseekV41ExpertSiluDecodeFp8Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ExpertPairedDecodeFp8Gaudi2::name) == 0)
+        return DeepseekV41ExpertPairedDecodeFp8Gaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_control_rrms_swizzled_bf16_gaudi2") == 0)
+        return DeepseekV41ControlGemvRrmsGaudi2(3).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_control_rrms_bf16_weight_gaudi2") == 0)
+        return DeepseekV41ControlGemvRrmsGaudi2(4).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_control_rrms_parallel_bf16_gaudi2") == 0)
+        return DeepseekV41ControlGemvRrmsGaudi2(2).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41ControlMmeFinishGaudi2::name) == 0)
+        return DeepseekV41ControlMmeFinishGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, "custom_deepseek_v41_mhc_rrms_post_gaudi2") == 0)
+        return DeepseekV41MhcMmePostCollapseGaudi2(2).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcMmePostCollapseGaudi2::name) == 0)
+        return DeepseekV41MhcMmePostCollapseGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name,"custom_deepseek_v41_mhc_post_weighted_stats_gaudi2")==0)
+        return DeepseekV41MhcWeightedStatsGaudi2().GetGcDefinitions(params,instance);
+    if (std::strcmp(params->guid.name,"custom_deepseek_v41_norm_from_weighted_stats_gaudi2")==0)
+        return DeepseekV41MhcWeightedStatsGaudi2(true).GetGcDefinitions(params,instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcGatesPostGaudi2::name) == 0)
+        return DeepseekV41MhcGatesPostGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41MhcPostCollapseGaudi2::name) == 0)
+        return DeepseekV41MhcPostCollapseGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillMhcGaudi2::name) == 0)
+        return DeepseekV41PrefillMhcGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillMhcCollapseGaudi2::name) == 0)
+        return DeepseekV41PrefillMhcCollapseGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillMhcRrmsGaudi2::name) == 0)
+        return DeepseekV41PrefillMhcRrmsGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillMhcPostPrepareGaudi2::name) == 0)
+        return DeepseekV41PrefillMhcPostPrepareGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41IndexReduceGaudi2::name) == 0)
+        return DeepseekV41IndexReduceGaudi2().GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillFlashGaudi2::kv_name) == 0)
+        return DeepseekV41PrefillFlashGaudi2(false).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41PrefillFlashGaudi2::mask_name) == 0)
+        return DeepseekV41PrefillFlashGaudi2(true).GetGcDefinitions(params, instance);
+    if (std::strcmp(params->guid.name, DeepseekV41CandidateGatherGaudi2::name) == 0)
+        return DeepseekV41CandidateGatherGaudi2().GetGcDefinitions(params, instance);
+
+    for(unsigned i=0;i<6;++i) if(std::strcmp(params->guid.name,DeepseekV41StateRowsGaudi2::names[i])==0)
+        return DeepseekV41StateRowsGaudi2(i).GetGcDefinitions(params,instance);
+    if(std::strcmp(params->guid.name,DeepseekV41ReindexCompactGaudi2::name)==0)
+        return DeepseekV41ReindexCompactGaudi2().GetGcDefinitions(params,instance);
+    if(std::strcmp(params->guid.name,DeepseekV41IndexTileReduceGaudi2::name)==0)
+        return DeepseekV41IndexTileReduceGaudi2().GetGcDefinitions(params,instance);
+    DeepseekV4MHCPostPrepareGaudi2 mhcPostPrepareInstance;
+    DeepseekV4Sinkhorn4Gaudi2 sinkhornInstance;
+    sinkhornInstance.GetKernelName(kernelName);
+    if (std::strcmp(params->guid.name, kernelName) == 0) {
+        return sinkhornInstance.GetGcDefinitions(params, instance);
+    }
+    mhcPostPrepareInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mhcPostPrepareInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4MHCPreEmitGaudi2 mhcPreEmitInstance;
+    mhcPreEmitInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mhcPreEmitInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4MHCPreEmitNormGaudi2 mhcPreEmitNormInstance;
+    mhcPreEmitNormInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return mhcPreEmitNormInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4TopkSoftplusSqrtGaudi2 routerTopkInstance;
+    routerTopkInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return routerTopkInstance.GetGcDefinitions(params, instance);
+    }
+
+    DeepseekV4FillShortTopkI32Gaudi2 fillShortTopkInstance;
+    fillShortTopkInstance.GetKernelName(kernelName);
+    if (strcmp(params->guid.name, kernelName) == 0)
+    {
+        return fillShortTopkInstance.GetGcDefinitions(params, instance);
+    }
+
+    auto stock = stock_symbol<decltype(&InstantiateTpcKernel)>("InstantiateTpcKernel");
+    return stock ? stock(params, instance) : tpc_lib_api::GLUE_NODE_NOT_FOUND;
+}
+
+tpc_lib_api::GlueCodeReturn GetShapeInference(tpc_lib_api::DeviceId deviceId,
+    const tpc_lib_api::ShapeInferenceParams* params, tpc_lib_api::ShapeInferenceOutput* output) {
+    if (!params || !output) return tpc_lib_api::GLUE_FAILED;
+    const auto* guid = params->pGuid ? params->pGuid : &params->guid;
+    if (std::strncmp(guid->name, "custom_deepseek_v4_", 19) == 0) return tpc_lib_api::GLUE_SUCCESS;
+    auto stock = stock_symbol<decltype(&GetShapeInference)>("GetShapeInference");
+    return stock ? stock(deviceId, params, output) : tpc_lib_api::GLUE_SUCCESS;
+}
+}

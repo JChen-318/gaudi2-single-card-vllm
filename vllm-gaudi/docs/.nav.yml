@@ -1,0 +1,64 @@
+nav:
+  - Getting Started:
+    - README.md
+    - Quick Start: 
+      - getting_started/quickstart/quickstart.md
+      - getting_started/quickstart/quickstart_configuration.md
+      - getting_started/quickstart/quickstart_inference.md
+      - getting_started/quickstart/quickstart_single_process_model_swap_online.md
+    - getting_started/installation.md
+    - release_notes.md
+    - getting_started/compatibility_matrix.md
+    - getting_started/validated_models.md
+  - Configuration Guides:
+    - configuration/env_variables.md
+    - configuration/long_context.md
+    - Calibration: 
+      - configuration/calibration/calibration.md
+      - configuration/calibration/calibration_one_node.md
+      - configuration/calibration/calibration_multi_node.md
+    - Quantization and Inference: 
+      - configuration/quantization/quantization.md
+      - configuration/quantization/inc.md
+      - configuration/quantization/auto_awq.md
+      - configuration/quantization/gptqmodel.md
+    - configuration/performance_tuning.md
+    # - configuration/pipeline_parallelism.md
+    - Warm-up:
+      - configuration/warm-up/warm-up.md
+      - configuration/warm-up/sampler_warm-up.md
+      - configuration/warm-up/defragmenter_warm-up.md
+      - configuration/warm-up/managing_warm-up.md
+  - Features:
+    - features/supported_features.md
+    - features/flashinfer_gaudi.md
+    - features/flashinfer_native_backend.md
+    - features/deepseek_v4_indexed_mme.md
+    - features/deepseek_v4_native_decode.md
+    - features/deepseek_v41.md
+    - features/minimax_h3.md
+    - features/bucketing_mechanism.md
+    - features/floating_point_8.md
+    - features/warmup.md
+    - features/row_parallel_chunking.md
+  - Design:
+    - design/single_process_model_swap_arch_overview.md
+  - Developer Guides:
+    - dev_guide/plugin_system.md
+    - dev_guide/ci-failures.md
+    - dev_guide/deepseek_v41_tp4_optimization_ledger.md
+    - Profiling:
+      - dev_guide/profiling/profiling.md
+      - dev_guide/profiling/e2e-profiling.md
+      - dev_guide/profiling/high-level-profiling.md
+      - dev_guide/profiling/pytorch-profiling-async.md
+      - dev_guide/profiling/pytorch-profiling-script.md
+      - dev_guide/profiling/profiling-prompt-decode.md
+  - API Reference:
+    - Summary: api/README.md
+    - Contents:
+      - glob: api/vllm_gaudi/*
+        preserve_directory_names: true
+  - general/troubleshooting.md
+  - general/faq.md
+  - general/security.md

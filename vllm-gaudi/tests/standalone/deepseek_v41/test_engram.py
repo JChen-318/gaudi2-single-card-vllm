@@ -1,0 +1,222 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Hash/history and native host-gather contracts before model graph integration."""
+
+import gc
+
+import numpy as np
+import pytest
+
+from vllm_gaudi.ops.deepseek_v41_engram import EngramHashLayout, EngramTokenHistory
+
+
+def layout():
+    return EngramHashLayout.from_config({
+        "engram_layer_ids": [1, 14],
+        "engram_num_embeddings": [72, 204],
+        "engram_max_ngram_size": 4,
+        "engram_n_heads": 2,
+        "engram_compressed_vocab_size": 8,
+        "engram_vocab_size": 5,
+        "engram_pad_token_id": 2,
+        "engram_head_dim": 32
+    })
+
+
+def reference_hashes(parameters, tokens, dead):
+    # Scalar reference follows vLLM #56214 _hash_ids_kernel: encountering an
+    # image or the sequence start pads every older lookback of this n-gram.
+    result = np.empty((len(tokens), 2, 6), dtype=np.int32)
+    for position in range(len(tokens)):
+        for layer in range(2):
+            value, blocked = 0, False
+            for shift in range(4):
+                source = position - shift
+                blocked = blocked or source < 0 or dead[source]
+                code = 2 if blocked else tokens[source] % 8
+                value ^= int(parameters.multipliers[layer, shift]) * code
+                if shift:
+                    for head in range(2):
+                        column = (shift - 1) * 2 + head
+                        result[position, layer, column] = value % int(parameters.primes[layer, column]) + int(
+                            parameters.offsets[layer, column])
+    return result
+
+
+def test_exact_hash_head_shards_and_image_boundary():
+    parameters = layout()
+    assert parameters.primes.tolist() == [[5, 7, 11, 13, 17, 19], [23, 29, 31, 37, 41, 43]]
+    for layer, end in zip((1, 14), (72, 204)):
+        first, second = [parameters.head_shard(layer, tp) for tp in (0, 1)]
+        assert first["row_stop"] == second["row_start"]
+        assert first["head_stop"] == second["head_start"] == 3
+        assert second["row_stop"] == end
+    state = EngramTokenHistory(parameters, np.arange(16) % 8)
+    state.reset("image-request")
+    tokens, dead = [3, 4, 9, 8, 7, 6], [False, True, True, False, False, False]
+    batch = state.prepare("image-request", tokens, dead)
+    assert np.array_equal(batch.hash_ids, reference_hashes(parameters, tokens, dead))
+    assert batch.active_mask.tolist() == [not value for value in dead]
+
+
+def test_verify_rejection_request_switch_and_chunk_history():
+    parameters = layout()
+    state = EngramTokenHistory(parameters, np.arange(16) % 8)
+    state.reset("a")
+    prefix = state.prepare("a", [4, 5])
+    state.commit(prefix, 2)
+    verify = state.prepare("a", [6, 7, 8, 9, 10])
+    with pytest.raises(RuntimeError, match="pending"):
+        state.prepare("a", [2])
+    state.commit(verify, 2)
+    next_batch = state.prepare("a", [11, 12])
+    expected = reference_hashes(parameters, [4, 5, 6, 7, 11, 12], [False] * 6)[-2:]
+    assert next_batch.start_position == 4
+    assert np.array_equal(next_batch.hash_ids, expected)
+    state.discard(next_batch)
+    replay = state.prepare("a", [11, 12])
+    assert np.array_equal(replay.hash_ids, next_batch.hash_ids)
+    state.reset("b")
+    with pytest.raises(RuntimeError, match="Stale"):
+        state.commit(replay, 2)
+    fresh = state.prepare("b", [11, 12])
+    assert np.array_equal(fresh.hash_ids, reference_hashes(parameters, [11, 12], [False] * 2))
+
+
+def test_native_gather_fixed_buffers_and_completion_ownership(tmp_path):
+    from vllm_gaudi.lib.dsv41_host_gather import GatherSlot, HostRows
+    rows = np.arange(8 * 32, dtype=np.uint8).reshape(8, 32)
+    scales = np.arange(8, dtype=np.uint8).reshape(8, 1)
+    path = tmp_path / "tables.bin"
+    # Deliberately unaligned offsets exercise source safetensors header offsets.
+    path.write_bytes(b"header" + rows.tobytes() + b"pad" + scales.tobytes())
+    table = HostRows(str(path), 6 + 4 * 32, str(path), 6 + rows.size + 3 + 4, 4, 8, 32, True, False)
+    slot = GatherSlot(6, 32)
+    weight_view, scale_view = slot.weights, slot.scales
+    pointers = weight_view.ctypes.data, scale_view.ctypes.data
+    for indices in ([7, 4, 7, 5], [5, 6, 4]):
+        generation = slot.submit(table, np.array(indices, dtype=np.int32))
+        slot.wait(generation)
+        assert np.array_equal(weight_view[:len(indices)], rows[indices])
+        assert np.array_equal(scale_view[:len(indices)], scales[indices])
+        assert slot.major_faults == 0
+        with pytest.raises(RuntimeError, match="earlier consumer"):
+            slot.submit(table, np.array(indices, dtype=np.int32))
+        with pytest.raises(RuntimeError, match="stale"):
+            slot.release(generation - 1)
+        slot.release(generation)
+        assert pointers == (slot.weights.ctypes.data, slot.scales.ctypes.data)
+    # The slot owns its table until completion; caller reference removal is safe.
+    generation = slot.submit(table, np.array([4], dtype=np.int32))
+    del table
+    gc.collect()
+    slot.wait(generation)
+    assert np.array_equal(weight_view[0], rows[4])
+    slot.release(generation)
+
+
+def test_native_gather_rejects_wrong_head_rows(tmp_path):
+    from vllm_gaudi.lib.dsv41_host_gather import GatherSlot, HostRows
+    path = tmp_path / "table.bin"
+    path.write_bytes(bytes(4 * 33))
+    table = HostRows(str(path), 0, str(path), 4 * 32, 8, 12, 32, False, False)
+    slot = GatherSlot(1, 32)
+    generation = slot.submit(table, np.array([7], dtype=np.int32))
+    with pytest.raises(RuntimeError, match="TP head shard"):
+        slot.wait(generation)
+
+
+def test_deferred_engram_waits_once_at_ordered_consumers_and_rejects_stale_ticket():
+    from types import SimpleNamespace
+    from vllm_gaudi.ops.deepseek_v41_host import EngramHost, EngramTransfer
+    host = EngramHost.__new__(EngramHost)
+    host.tensor_parallel_size, host.generation = 4, 7
+    host.ready_ticket, host.native_c1, host.batches = None, None, None
+    ticket = EngramTransfer(7, 0, SimpleNamespace(hash_ids=SimpleNamespace(shape=(16384, 2, 24))), (object(), object()))
+    host.pending = ticket
+    calls = []
+    host._wait_layer = lambda value, index: calls.append((value.generation, index))
+    rows = host.defer_prefill(ticket)
+    assert len(rows) == 2 and not calls
+    with pytest.raises(RuntimeError, match="layer order"):
+        rows[1]
+    with pytest.raises(RuntimeError, match="already bound"):
+        host.defer_prefill(ticket)
+    with pytest.raises(RuntimeError, match="consumer owner"):
+        host.wait(ticket)
+    assert rows[0] is ticket.buffers[0] and rows[0] is ticket.buffers[0]
+    assert calls == [(7, 0)] and host.ready_ticket is None
+    with pytest.raises(RuntimeError, match="Stale"):
+        host.complete(ticket, 16384)
+    assert rows[1] is ticket.buffers[1] and host.ready_ticket is ticket
+    assert calls == [(7, 0), (7, 1)]
+    host.pending = None
+    with pytest.raises(RuntimeError, match="Stale"):
+        rows[0]
+
+
+@pytest.mark.parametrize("rank", range(4))
+def test_local_hash_heads_match_complete_hashes_through_history_and_image_boundaries(rank):
+    parameters = EngramHashLayout.from_config({
+        "engram_layer_ids": [1, 14],
+        "engram_num_embeddings": [10000, 10000],
+        "engram_max_ngram_size": 4,
+        "engram_n_heads": 8,
+        "engram_compressed_vocab_size": 8,
+        "engram_vocab_size": 5,
+        "engram_pad_token_id": 2,
+        "engram_head_dim": 256
+    })
+    full = EngramTokenHistory(parameters, np.arange(16) % 8)
+    local = EngramTokenHistory(parameters, np.arange(16) % 8)
+    shard = parameters.head_shard(1, rank, 4)
+    start, stop = shard["head_start"], shard["head_stop"]
+    for request in ("first", "second"):
+        full.reset(request)
+        local.reset(request)
+        for count, accepted in ((2, 2), (16384, 16384), (6, 3), (16384, 16381), (1, 0), (1, 1)):
+            tokens = np.arange(count) % 16
+            mask = np.arange(count) % 11 == 3
+            expected = full.prepare(request, tokens, mask)
+            actual = local.prepare(request, tokens, mask, head_range=(start, stop))
+            assert actual.head_start == start and actual.hash_ids.shape == (count, 2, 6)
+            assert np.array_equal(actual.hash_ids, expected.hash_ids[:, :, start:stop])
+            assert np.array_equal(actual.compressed_ids, expected.compressed_ids)
+            full.commit(expected, accepted)
+            local.commit(actual, accepted)
+            assert np.array_equal(local.history, full.history) and local.position == full.position
+
+
+def test_request_batch_hashes_keep_absolute_histories_and_commit_each_request():
+    from vllm_gaudi.ops.deepseek_v41_engram import EngramHistoryBatch
+    parameters = layout()
+    histories = {name: EngramTokenHistory(parameters, np.arange(16) % 8) for name in ("a", "b", "c")}
+    prefixes = {"a": [3, 4, 5], "b": [7], "c": [2, 1, 9, 11, 3]}
+    for name, history in histories.items():
+        history.reset(name)
+        prefix = history.prepare(name, prefixes[name])
+        history.commit(prefix, len(prefixes[name]))
+    spans = (("c", 5, [12], [False]), ("a", 3, [6, 7], [True, False]), ("b", 1, [8], [False]))
+    packet = EngramHistoryBatch.prepare(histories, spans, capacity=8)
+    expected = []
+    for name, start, tokens, dead in spans:
+        expected.append(reference_hashes(parameters, prefixes[name] + tokens, [False] * start + dead)[-len(tokens):])
+    assert np.array_equal(packet.hash_ids, np.concatenate(expected))
+    assert [histories[name].position for name in ("a", "b", "c")] == [3, 1, 5]
+    with pytest.raises(ValueError):
+        packet.commit((1, 3, 1))
+    assert all(history.pending is not None for history in histories.values())
+    packet.commit((1, 2, 0))  # one cancelled request consumes no input
+    assert [histories[name].position for name in ("a", "b", "c")] == [5, 1, 6]
+    assert all(history.pending is None for history in histories.values())
+    with pytest.raises(RuntimeError, match="stale"):
+        packet.commit((1, 2, 0))
+
+
+def test_invalid_request_batch_rolls_back_only_unsubmitted_preparations():
+    from vllm_gaudi.ops.deepseek_v41_engram import EngramHistoryBatch
+    histories = {name: EngramTokenHistory(layout(), np.arange(16) % 8) for name in ("a", "b")}
+    for name, history in histories.items():
+        history.reset(name)
+    with pytest.raises(RuntimeError, match="absolute position"):
+        EngramHistoryBatch.prepare(histories, (("a", 0, [3], None), ("b", 1, [4], None)), 2)
+    assert all(history.pending is None and history.position == 0 for history in histories.values())
