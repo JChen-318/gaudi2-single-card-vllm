@@ -1,0 +1,22 @@
+# Source publication only; do not add machine state or generated artifacts.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.so
+*.o
+*.a
+*.whl
+*.pyc
+__pycache__/
+.venv/
+build/
+dist/
+*.log
+*.safetensors
+*.pt
+*.pth
+.graph_dumps/
+.pytest_cache/
+.ruff_cache/
