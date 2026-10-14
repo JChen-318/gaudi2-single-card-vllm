@@ -505,6 +505,9 @@ if TYPE_CHECKING:
     VLLM_HPU_DFLASH2_FULL_QUERY_CONV: bool = False
     VLLM_HPU_DFLASH2_DIRECT_CHECKPOINTS: bool = False
     VLLM_HPU_DFLASH2_DEVICE_PREPARE: bool = False
+    VLLM_HPU_DFLASH2_CPU_INPUTS: bool = False
+    VLLM_HPU_DFLASH2_CONTEXT_REGION: bool = False
+    VLLM_HPU_DFLASH2_DECODE_CONTROL: str = ""
     VLLM_HPU_DFLASH2_HOST_OPT: bool = False
     VLLM_HPU_DFLASH2_HOST_OPT_CONTROL: str | None = None
     VLLM_HPU_FLASHINFER_GDN_TP2: bool = False
@@ -1604,6 +1607,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
 
     # Keep accepted lengths and draft input preparation on HPU so the draft
     # can be queued before target samples are materialized on the host.
+    "VLLM_HPU_DFLASH2_CPU_INPUTS":
+    lambda: os.environ.get("VLLM_HPU_DFLASH2_CPU_INPUTS", "0").strip().lower() in ("1", "true"),
+    "VLLM_HPU_DFLASH2_CONTEXT_REGION":
+    lambda: os.environ.get("VLLM_HPU_DFLASH2_CONTEXT_REGION", "0").strip().lower() in ("1", "true"),
+    "VLLM_HPU_DFLASH2_DECODE_CONTROL":
+    lambda: os.environ.get("VLLM_HPU_DFLASH2_DECODE_CONTROL", ""),
     "VLLM_HPU_DFLASH2_DEVICE_PREPARE":
     lambda: os.environ.get("VLLM_HPU_DFLASH2_DEVICE_PREPARE", "false").strip().lower() in ("1", "true"),
 
@@ -1873,6 +1882,34 @@ environment_variables["VLLM_HPU_DFLASH2_DRAFTER_STATIC_COMPILE"] = lambda: os.en
     "VLLM_HPU_DFLASH2_DRAFTER_STATIC_COMPILE", "0").lower() in ("1", "true")
 environment_variables["VLLM_HPU_GUARD_CENSUS_FILE"] = lambda: os.environ.get(
     "VLLM_HPU_GUARD_CENSUS_FILE", "")
+# v6 (Kiro): each switch is independent and off by default.
+environment_variables["VLLM_HPU_UNIQUE_COMPILE_CODE"] = lambda: os.environ.get(
+    "VLLM_HPU_UNIQUE_COMPILE_CODE", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_DRAFT_STACK"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_DRAFT_STACK", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_FUSED_MODEL_ENTRY"] = lambda: os.environ.get(
+    "VLLM_HPU_FUSED_MODEL_ENTRY", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_LOOKAHEAD"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_LOOKAHEAD", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_FAST_TOPK_TOPP"] = lambda: os.environ.get(
+    "VLLM_HPU_FAST_TOPK_TOPP", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_CHUNKED_TOPK"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_CHUNKED_TOPK", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_LM_HEAD_FP8"] = lambda: os.environ.get(
+    "VLLM_HPU_LM_HEAD_FP8", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_STEP_TIMER"] = lambda: os.environ.get("VLLM_HPU_STEP_TIMER", "")
+environment_variables["VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_V6_PROFILE_PREP"] = lambda: os.environ.get("VLLM_HPU_V6_PROFILE_PREP", "")
+environment_variables["VLLM_HPU_V6_PROFILE_DRAFT"] = lambda: os.environ.get("VLLM_HPU_V6_PROFILE_DRAFT", "")
+environment_variables["VLLM_HPU_DFLASH2_PAGE_BUCKETS"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_PAGE_BUCKETS", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY"] = lambda: int(os.environ.get(
+    "VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY", "64"))
+# JSON {"lookahead": bool, "fast_topk": bool}; re-read whenever the batch changes.
+environment_variables["VLLM_HPU_V6_CONTROL"] = lambda: os.environ.get("VLLM_HPU_V6_CONTROL", "")
 
 environment_variables['VLLM_HPU_MTP_METADATA_POOL'] = lambda: os.environ.get(
     'VLLM_HPU_MTP_METADATA_POOL', '0') == '1'

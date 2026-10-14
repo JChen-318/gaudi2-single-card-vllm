@@ -37,6 +37,7 @@ from vllm_gaudi.extension.utils import align_and_pad, pad_list, with_default
 from vllm_gaudi.extension.debug import init_debug_logger
 from vllm_gaudi.v1.worker.hpu_dp_utils import set_hpu_dp_metadata
 from vllm_gaudi.v1.worker.gdn_state_layout import has_contiguous_dflash_checkpoints
+from vllm_gaudi.v1.worker import kiro_v6
 from vllm_gaudi.v1.worker.attention_group_routing import decode_group_addresses, prefill_group_addresses
 from vllm_gaudi.v1.worker import decode_fast_paths
 from vllm_gaudi.v1.worker import decode_shared_prefix
@@ -1488,8 +1489,20 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
         input_ids = kwargs['input_ids']
         model_has_chunked_attention = kwargs.pop('model_has_chunked_attention', False)
         framework_attn_metadata = isinstance(kwargs.get('attn_metadata'), Mapping)
+        fused_entry = getattr(self, '_hpu_fused_entry_prep', None)
+        if (fused_entry is not None and 'attn_metadata' in kwargs and not self.pooling_model
+                and not framework_attn_metadata and not mtp_metadata_prepared
+                and self._rotary_prepare_cos_sin is not None
+                and (gaudi_envs.VLLM_HPU_SKIP_UNBACKED_BLOCK_LIST or not self.flatten_input)):
+            # VLLM_HPU_FUSED_MODEL_ENTRY: same two calls, one compiled region.
+            kwargs['attn_metadata'] = fused_entry(kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
+                                                  input_ids.device, self.dtype, model_has_chunked_attention,
+                                                  kwargs['positions'])
+            rotary_done = True
+        else:
+            rotary_done = False
         if ('attn_metadata' in kwargs and not self.pooling_model and not framework_attn_metadata
-                and not mtp_metadata_prepared):
+                and not mtp_metadata_prepared and not rotary_done):
             with mtp_phase('draft_adapter_metadata' if getattr(self.model, '_hpu_mtp_flatten_hidden', False)
                            else 'target_adapter_metadata'):
                 kwargs['attn_metadata'] = self.metadata_processor.process_metadata(kwargs['attn_metadata'],
@@ -1503,7 +1516,7 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
             if (attn_md is not None and getattr(attn_md, 'is_prompt', False)
                     and getattr(attn_md, 'block_list', None) is not None):
                 _mark_unbacked_dim0(attn_md.block_list)
-        if self._rotary_prepare_cos_sin is not None:
+        if self._rotary_prepare_cos_sin is not None and not rotary_done:
             with mtp_phase('draft_rotary_prepare' if getattr(self.model, '_hpu_mtp_flatten_hidden', False)
                            else 'target_rotary_prepare'):
                 self._rotary_prepare_cos_sin(kwargs['positions'], recompute_cos_sin=self.recompute_cos_sin)
@@ -1754,6 +1767,12 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
                 logger.info("Direct GDN state destinations bound: layers=%d; queued state DMA disabled", bound)
             self._gdn_state_view_key = key
 
+    def fused_entry_prep(self, attn_metadata, batch_size, seq_len, device, dtype, chunked, positions):
+        """Attention metadata and rotary cos/sin, traced together (uncompiled originals)."""
+        attn_metadata = self._hpu_raw_process_metadata(attn_metadata, batch_size, seq_len, device, dtype, chunked)
+        self._hpu_raw_rotary_prepare(positions, recompute_cos_sin=self.recompute_cos_sin)
+        return attn_metadata
+
     def embed_input_ids(self, input_ids, multimodal_embeddings=None, is_multimodal=False):
         return self.model.embed_input_ids(input_ids=input_ids,
                                           multimodal_embeddings=multimodal_embeddings,
@@ -1795,6 +1814,18 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
 
     def precompute_and_store_context_kv(self, *args, **kwargs):
         return self.model.precompute_and_store_context_kv(*args, **kwargs)
+
+    def select_and_store_dflash2_context(self, hidden_states, aux_hidden_states,
+                                       source_indices, context_positions, context_slots):
+        """Keep prefix gathers, feature projection and draft KV writes together."""
+        if aux_hidden_states:
+            selected = [states.reshape(-1, states.shape[-1]).index_select(0, source_indices)
+                        for states in aux_hidden_states]
+            context = torch.cat(selected, dim=-1)
+        else:
+            context = hidden_states.reshape(-1, hidden_states.shape[-1]).index_select(0, source_indices)
+        context = self.model.combine_hidden_states(context)
+        self.model.precompute_and_store_context_kv(context, context_positions, context_slots)
 
     def prepare_dflash2_inputs(self, *args, **kwargs):
         from flashinfer_gaudi.dflash2 import prepare_device_inputs
@@ -2099,6 +2130,23 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         self._dflash_host_control = DFlashHostControl(gaudi_envs.VLLM_HPU_DFLASH2_HOST_OPT_CONTROL,
                                                      self._dflash_host_opt)
         self._dflash_host_features = self._dflash_host_control.active
+        from vllm_gaudi.v1.spec_decode.dflash_cpu_inputs import DFlashDecodeControl
+
+        self._dflash_decode_control = DFlashDecodeControl(
+            gaudi_envs.VLLM_HPU_DFLASH2_DECODE_CONTROL, self._dflash_host_opt)
+        self._step_timer = (kiro_v6.StepTimer(gaudi_envs.VLLM_HPU_STEP_TIMER)
+                            if gaudi_envs.VLLM_HPU_STEP_TIMER and is_driver_worker else None)
+        if gaudi_envs.VLLM_HPU_FAST_TOPK_TOPP:
+            from vllm_gaudi.v1.sample import fast_topk_topp
+            fast_topk_topp.install()
+        self._v6_control = kiro_v6.RuntimeControl(gaudi_envs.VLLM_HPU_V6_CONTROL)
+        self._draft_profiler = None
+        self._dflash_lookahead = (kiro_v6.DFlashLookahead(
+            self, gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE, gaudi_envs.VLLM_HPU_V6_PROFILE_PREP,
+            gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA else None)
+                                  if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD
+                                  and self.speculative_config is not None and self.speculative_config.use_dflash()
+                                  else None)
         self.observability_config = vllm_config.observability_config
         self.is_driver_worker = is_driver_worker
         self.use_aux_hidden_state_outputs = False
@@ -3637,6 +3685,11 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             self._generate_req_id_output_token_ids_lst(request_ids, \
                                                        pad_to, logits_reqs)
         self._dflash_host_features = self._dflash_host_control.refresh(self.input_batch.req_ids)
+        decode_features = self._dflash_decode_control.refresh(self.input_batch.req_ids)
+        if getattr(self, 'drafter', None) is not None and hasattr(self.drafter, '_cpu_inputs'):
+            self.drafter._cpu_inputs = gaudi_envs.VLLM_HPU_DFLASH2_CPU_INPUTS and decode_features['cpu_inputs']
+            self.drafter._context_region = (gaudi_envs.VLLM_HPU_DFLASH2_CONTEXT_REGION
+                                            and decode_features['context_region'])
         self.input_batch._dflash_host_opt = self._dflash_host_features['sampling_cache']
         if self._dflash_host_opt and getattr(self, 'drafter', None) is not None:
             self.drafter._host_opt = self._dflash_host_features['draft_inputs']
@@ -5624,6 +5677,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         num_prefills,
         num_decodes,
         warmup=False,
+        reuse_decode_data=None,
     ):
 
         total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
@@ -5659,7 +5713,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             num_scheduled_tokens.append(seq_num_scheduled_tokens)
             num_prompt_tokens.append(seq_num_prompt_tokens)
         return (self._prepare_prefill_inputs(num_prefills, num_decodes, num_scheduled_tokens),
-                self._prepare_decode_inputs(num_decodes, num_scheduled_tokens, scheduler_output))
+                self._prepare_decode_inputs(num_decodes, num_scheduled_tokens, scheduler_output)
+                if reuse_decode_data is None else (reuse_decode_data, None))
 
     def _seq_len(self, attn_metadata):
         return attn_metadata.seq_len()
@@ -6271,6 +6326,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         warmup_mode: bool = False,
     ) -> ModelRunnerOutput | None:
 
+        if self._step_timer is not None and not warmup_mode:
+            self._step_timer.mark("E", -1, -1, scheduler_output.total_num_scheduled_tokens)
         self.run_defragmenter(scheduler_output, warmup_mode)
 
         batch_changed = self._update_states(scheduler_output)
@@ -6499,11 +6556,22 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         num_decodes = len(pd_info.decode_req_ids)
         num_prefills = len(pd_info.prompt_req_ids)
         num_reqs = num_decodes + num_prefills
+        v6_active = self._v6_control.refresh() if batch_changed else self._v6_control.active
+        if gaudi_envs.VLLM_HPU_FAST_TOPK_TOPP:
+            from vllm_gaudi.v1.sample import fast_topk_topp
+            batch = self.input_batch
+            fast_topk_topp.set_active(v6_active["fast_topk"] and fast_topk_topp.eligible(
+                batch.top_k_cpu[:batch.num_reqs], batch.top_p_cpu[:batch.num_reqs], batch.no_top_k, batch.no_top_p))
         if self.use_async_scheduling:
             self.invalid_req_indices: list[int] = []
+        reuse_decode_data = None
+        if self._dflash_lookahead is not None and not warmup_mode and num_decodes:
+            # A fully reused lookahead already built (and ran) this round's decode inputs.
+            reuse_decode_data = self._dflash_lookahead.peek_full_reuse(scheduler_output, num_decodes,
+                                                                       pd_info.prompt_req_ids)
         with self.profiler.record_event('internal', 'prepare_input_tensors'):
             prefill_input_data, decode_input_data = self._prepare_inputs(scheduler_output, num_prefills, num_decodes,
-                                                                         warmup_mode)
+                                                                         warmup_mode, reuse_decode_data)
         prefill_data, \
             dummy_prefill_input_data_batches_across_dp = prefill_input_data
         num_pad_prefill_batch_across_dp = \
@@ -6660,18 +6728,30 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             self.profiler.start("internal", "decode")
             fuse_greedy_sampling = self._can_fuse_plain_greedy_sampling(pd_info.decode_req_ids)
             htorch.core.mark_step()
-            non_flattened_hidden_states, aux_hidden_states, \
-                sample_hidden_states, logits_device, fused_sampled_token_ids = \
-                    self._execute_model_generic(
-                decode_data.token_ids,
-                decode_data.position_ids,
-                decode_data.attn_metadata,
-                decode_data.logits_indices,
-                self.kv_caches,
-                lora_logits_mask,
-                lora_mask,
-                warmup_mode=warmup_mode,
-                fuse_greedy_sampling=fuse_greedy_sampling)
+            lookahead_outputs = None
+            lookahead_sampled = None
+            if self._dflash_lookahead is not None and not warmup_mode:
+                # Always consume a pending lookahead: its forward already ran.
+                lookahead = self._dflash_lookahead.take(scheduler_output, decode_data, num_decodes,
+                                                        pd_info.prompt_req_ids)
+                if lookahead is not None:
+                    lookahead_outputs, lookahead_sampled = lookahead
+            if lookahead_outputs is not None:
+                non_flattened_hidden_states, aux_hidden_states, \
+                    sample_hidden_states, logits_device, fused_sampled_token_ids = lookahead_outputs
+            else:
+                non_flattened_hidden_states, aux_hidden_states, \
+                    sample_hidden_states, logits_device, fused_sampled_token_ids = \
+                        self._execute_model_generic(
+                    decode_data.token_ids,
+                    decode_data.position_ids,
+                    decode_data.attn_metadata,
+                    decode_data.logits_indices,
+                    self.kv_caches,
+                    lora_logits_mask,
+                    lora_mask,
+                    warmup_mode=warmup_mode,
+                    fuse_greedy_sampling=fuse_greedy_sampling)
             htorch.core.mark_step()
 
             if self.use_structured_output:
@@ -6734,8 +6814,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                                 self._gdn_num_accepted_by_req[req_id] = 1
                     else:
                         # Handling spec decode sampling.
-                        sampled_token_ids = None
-                        if is_dflash_spec and not self.rejection_sampler.synthetic_mode:
+                        sampled_token_ids = lookahead_sampled
+                        if sampled_token_ids is None and is_dflash_spec and not self.rejection_sampler.synthetic_mode:
                             from vllm_gaudi.v1.sample.hpu_rejection_sampler import (
                                 _dflash2_greedy_fastpath_supported, )
 
@@ -6777,6 +6857,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                             )
                         if isinstance(decode_sampled_token_ids, tuple):
                             decode_sampled_token_ids, _ = decode_sampled_token_ids
+                        if self._step_timer is not None and not warmup_mode:
+                            self._step_timer.mark("R")
                         # Trim output in case of dummy padding
                         decode_sampled_token_ids = decode_sampled_token_ids[:num_decodes]
                         if self._uses_speculative_gdn_checkpoints:
@@ -6966,12 +7048,26 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 # final prompt chunk produces logits and sampling metadata.
                 self._draft_token_ids = None
             else:
-                self._draft_token_ids = self.propose_draft_token_ids(
+                if self._dflash_lookahead is not None and self._v6_control.active["lookahead"]:
+                    # Prepare the predicted next round first: the device runs the drafter while
+                    # the host then queues the next forward right behind it.
+                    self._dflash_lookahead.stage(num_decodes, num_prefills, postprocessed_sampled_token_ids[:num_reqs],
+                                                 warmup_mode, self.use_structured_output)
+                if self._draft_profiler is None:
+                    self._draft_profiler = kiro_v6.WindowProfiler(gaudi_envs.VLLM_HPU_V6_PROFILE_DRAFT)
+                self._draft_token_ids = self._draft_profiler.run(
+                    self.propose_draft_token_ids,
                     scheduler_output, postprocessed_sampled_token_ids, sampling_metadata, non_flattened_hidden_states,
                     sample_hidden_states, aux_hidden_states, prefill_sampled_token_ids_device,
                     decode_sampled_token_ids_device, non_flattened_hidden_states_prefills,
                     sample_hidden_states_prefills, aux_hidden_states_prefills, num_decodes,
                     prefill_data if num_prefills > 0 else None, decode_data if num_decodes > 0 else None)
+                if self._step_timer is not None and not warmup_mode:
+                    self._step_timer.mark("D")
+                if self._dflash_lookahead is not None and self._v6_control.active["lookahead"]:
+                    self._dflash_lookahead.maybe_launch(num_decodes, num_prefills,
+                                                        postprocessed_sampled_token_ids[:num_reqs], warmup_mode,
+                                                        self.use_structured_output)
         ################## Spec Decode end ##################
 
         # Create output.
@@ -7031,6 +7127,14 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         if has_kv_transfer_group():
             get_kv_transfer_group().clear_connector_metadata()
 
+        if gaudi_envs.VLLM_HPU_LM_HEAD_FP8 and num_decodes and not warmup_mode:
+            self._v6_decode_steps = getattr(self, "_v6_decode_steps", 0) + 1
+            if self._v6_decode_steps % 50 == 0:
+                from vllm_gaudi.ops.hpu_lm_head_fp8 import report as report_fp8_lm_head
+                report_fp8_lm_head()
+        if self._step_timer is not None and not warmup_mode:
+            self._step_timer.mark("S", num_decodes, num_prefills,
+                                  sum(len(tokens) for tokens in postprocessed_sampled_token_ids))
         return model_runner_output
 
     @with_thread_limits()
@@ -7186,6 +7290,11 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 logger.info("Wrapping in HPUGraph took %.4f GB", self.model_memory_usage / float(2**30))
         #############################################
 
+        if gaudi_envs.VLLM_HPU_LM_HEAD_FP8:
+            from vllm_gaudi.ops.hpu_lm_head_fp8 import install as install_fp8_lm_head
+            install_fp8_lm_head(self.model, getattr(getattr(self, "drafter", None), "model", None))
+            torch.hpu.synchronize()
+
         with HabanaMemoryProfiler() as m:
             self._maybe_compile(self.model)
         self.model_memory_usage = m.consumed_device_memory
@@ -7253,6 +7362,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                         finally:
                             self.compile_config = model_compile_config
                         logger.info("DFlash2 drafter regions use static-shape compilation")
+                    elif (gaudi_envs.VLLM_HPU_DFLASH2_DRAFT_STACK and self.speculative_config.use_dflash()):
+                        from vllm_gaudi.v1.spec_decode.dflash_draft_stack import install_draft_stack
+                        install_draft_stack(self.drafter.model, self._compile)
+                        logger.info("DFlash2 draft embedding, layers and norm compiled as one region")
                     else:
                         self._regional_compilation(self.drafter.model)
                     if (self._is_qwen_mtp and gaudi_envs.VLLM_HPU_MTP_SINGLE_HEAD_COMPILE
@@ -7307,6 +7420,12 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         ]
         if self.speculative_config is not None and self.speculative_config.use_dflash():
             target_methods.append('sample_dflash2_greedy')
+        if (gaudi_envs.VLLM_HPU_FUSED_MODEL_ENTRY and isinstance(self.model, HpuModelAdapter)
+                and self.model._rotary_prepare_cos_sin is not None):
+            adapter = self.model
+            adapter._hpu_raw_process_metadata = adapter.metadata_processor.process_metadata
+            adapter._hpu_raw_rotary_prepare = adapter._rotary_prepare_cos_sin
+            adapter._hpu_fused_entry_prep = self._compile(adapter.fused_entry_prep)
         self._compile_named_methods(self.model, target_methods)
         if self._is_qwen_mtp and hasattr(self.drafter, "model"):
             draft_methods = ['metadata_processor.process_metadata', '_rotary_prepare_cos_sin']
@@ -7326,6 +7445,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                     'select_dflash2_candidates',
                 ],
             )
+            if gaudi_envs.VLLM_HPU_DFLASH2_CONTEXT_REGION:
+                self._compile_named_methods(self.drafter.model, ['select_and_store_dflash2_context'])
 
     def _compile_named_methods(self, model, method_names):
         for method_name in method_names:
@@ -7479,6 +7600,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         setattr_nested(model, name, module)
 
     def _compile(self, module):
+        if gaudi_envs.VLLM_HPU_UNIQUE_COMPILE_CODE:
+            module = kiro_v6.with_private_code(module)
         return torch.compile(module, **self.compile_config.get_compile_args())
 
     def _compile_spec_tensor_region(self, function):
@@ -9847,7 +9970,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         if self._draft_token_ids is None:
             return None
         req_ids = self.input_batch.req_ids
-        if isinstance(self._draft_token_ids, torch.Tensor):
+        lookahead_drafts = (self._dflash_lookahead.take_drafts() if self._dflash_lookahead is not None else None)
+        if lookahead_drafts is not None:
+            draft_token_ids = lookahead_drafts
+        elif isinstance(self._draft_token_ids, torch.Tensor):
             draft_token_ids = self._draft_token_ids.tolist()
         else:
             draft_token_ids = self._draft_token_ids
@@ -9985,6 +10111,20 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 return draft_token_ids.view(-1, 1)  # type: ignore
 
         return draft_token_ids
+
+    def _dflash_lookahead_sample(self, decode_data, logits_device, req_ids):
+        """Rejection-sample a predicted round right behind its forward (VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE)."""
+        import dataclasses
+        from vllm_gaudi.v1.sample.hpu_rejection_sampler import _dflash2_greedy_fastpath_supported
+
+        spec = decode_data.spec_decode_metadata
+        # The predicted prepare gathered placeholder drafts; read the real ones now.
+        spec = dataclasses.replace(spec, draft_token_ids=decode_data.token_ids[spec.target_logits_indices + 1])
+        sampling_metadata = self._prepare_sampling(False, req_ids, spec.bonus_logits_indices.shape[0])
+        if not self.rejection_sampler.synthetic_mode and _dflash2_greedy_fastpath_supported(sampling_metadata):
+            return self.model.sample_dflash2_greedy(logits_device, spec.draft_token_ids, spec.target_logits_indices,
+                                                    spec.bonus_logits_indices, spec.cu_num_draft_tokens)
+        return self.rejection_sampler(spec, None, logits_device, sampling_metadata).sampled_token_ids
 
     def _can_use_dflash2_device_prepare(
         self,
@@ -10156,23 +10296,41 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             query_starts.append(start + valid_count)
             bonus_token_ids.append(int(sampled_token_ids[row][-1]))
 
-        source_indices_hpu = async_h2d_copy(torch.tensor(source_indices, dtype=torch.int64), device=self.device)
-        context_states = self.drafter.combine_context_hidden_states(
-            hidden_states,
-            aux_hidden_states,
-            source_indices_hpu,
-        )
         block_table = self.input_batch.block_table[self.drafter.kv_cache_gid].get_cpu_tensor()
-        context_slot_parts = [
-            self.drafter.make_slot_mapping(block_table, [row], [positions], self).reshape(-1)
-            for row, positions in zip(active_rows, context_positions_by_row)
-        ]
-        context_slots = (context_slot_parts[0] if len(context_slot_parts) == 1 else torch.cat(context_slot_parts))
-        self.drafter.store_context(
-            context_states,
-            [position for positions in context_positions_by_row for position in positions],
-            context_slots,
-        )
+        packed_context = None
+        if (self.drafter._cpu_inputs and self._dflash_host_features['draft_inputs']
+                and (getattr(self, 'defragmenter', None) is None or not self.defragmenter.enabled)
+                and block_table.device.type == 'cpu' and block_table.dtype in (torch.int32, torch.int64)):
+            from vllm_gaudi.v1.spec_decode.dflash_cpu_inputs import prepare_context_cpu_inputs
+
+            packed_context = async_h2d_copy(prepare_context_cpu_inputs(
+                block_table, active_rows,
+                [int(self.input_batch.num_computed_tokens_cpu[row]) for row in active_rows],
+                [len(sampled_token_ids[row]) for row in active_rows], target_width,
+                self.drafter.block_size, int(self._PAD_BLOCK_ID), int(self._PAD_SLOT_ID)), device=self.device)
+            source_indices_hpu = packed_context[0]
+        else:
+            source_indices_hpu = async_h2d_copy(torch.tensor(source_indices, dtype=torch.int64), device=self.device)
+        if packed_context is not None and self.drafter._context_region:
+            self.drafter._model_api().select_and_store_dflash2_context(
+                hidden_states, aux_hidden_states, source_indices_hpu, packed_context[1], packed_context[2])
+        else:
+            context_states = self.drafter.combine_context_hidden_states(
+                hidden_states, aux_hidden_states, source_indices_hpu,
+            )
+            if packed_context is not None:
+                self.drafter.store_context_device(context_states, packed_context[1], packed_context[2])
+            else:
+                context_slot_parts = [
+                    self.drafter.make_slot_mapping(block_table, [row], [positions], self).reshape(-1)
+                    for row, positions in zip(active_rows, context_positions_by_row)
+                ]
+                context_slots = (context_slot_parts[0] if len(context_slot_parts) == 1 else torch.cat(context_slot_parts))
+                self.drafter.store_context(
+                    context_states,
+                    [position for positions in context_positions_by_row for position in positions],
+                    context_slots,
+                )
         drafts = self.drafter.propose_query_block(
             bonus_token_ids,
             query_starts,

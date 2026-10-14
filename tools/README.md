@@ -10,6 +10,7 @@
 | `bench_ctx.py <tag> <近似 token 数> [max_tokens]` | 日志类长提示词；额外输出提示词 token 数、每轮耗时、每轮接受数 |
 | `greedy2.py <out.json> [max_tokens] [sizes]` | `temperature=0` 输出集合：短提示词、长上下文、2 路并发 |
 | `gcmp.py <a.json> <b.json>` | 比较两份 `greedy2.py` 输出，给出公共前缀长度 |
+| `bench_multi.py [max_tokens]` | 15 类提示词（中英文解释与写作、多种代码、数学、翻译、摘要、JSON、表格、思考模式、复述）逐条单路测速，再测 3 组两路并发；输出每轮接受草稿数和每轮耗时 |
 
 说明：
 
@@ -28,6 +29,9 @@
 | `trace_hw_cmp.py <label=trace> ...` | 多份 trace 的内核耗时并排比较，按首尾差值排序 |
 | `trace_idle.py <trace>` | 设备空闲按主机阶段和间隙大小拆分 |
 | `gb_parse.py <log>` | 汇总 `TORCH_LOGS=graph_breaks` 的输出 |
+| `trace_regions.py <trace>` | 逐个编译区域列出主机提交时间、缓存查找耗时、自上一区域以来的设备空闲，以及主机领先设备多少 |
+| `steps_stats.py <steps.log>` | 读 `VLLM_HPU_STEP_TIMER` 日志，按并发数给出每轮耗时的中位数和分位数（无需 profiler） |
+| `phase_stats.py <steps.log>` | 同一日志里的阶段标记：读回、下一轮准备、草稿提交、预提交主模型、预提交采样之间的主机耗时 |
 
 ### 采集方法
 
@@ -45,3 +49,7 @@
 ## 其它
 
 `bucket_count.py` 复算线性分桶策略在不同 `VLLM_DECODE_BLOCK_BUCKET_MAX` 下会生成多少个 decode 桶。
+
+`dynamo_lookup_bench.py [N] [层数]` 在 CPU 上测量 N 个同类模块共用一个 forward 代码对象时的 Dynamo 缓存查找耗时，并与独立代码对象对照（说明 `VLLM_HPU_UNIQUE_COMPILE_CODE` 的来由）。
+
+**测速口径**：做同进程 A/B 时，优先用 `VLLM_HPU_STEP_TIMER` 加 `steps_stats.py` 的每轮中位数，它能分辨 0.1 ms 级的差别；客户端的「首尾时间差 / 轮数」受首尾轮和接受数波动影响，噪声约 ±1 ms。

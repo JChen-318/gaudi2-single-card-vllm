@@ -13,6 +13,22 @@ def _enabled_for(tensor: torch.Tensor) -> bool:
     return tensor.device.type == "hpu" and gaudi_envs.VLLM_HPU_FLASHINFER_DFLASH2
 
 
+def _chunked_top_k(scores: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """``top_k_reference`` with a two-stage exact top-k instead of a vocabulary-wide TopK.
+
+    The tie canonicalization (by token id, then by score) is the reference's.
+    """
+    from vllm_gaudi.v1.sample.fast_topk_topp import chunked_topk
+
+    values, indices = chunked_topk(scores, k)
+    indices = indices.to(torch.int32)
+    by_id = torch.argsort(indices, dim=-1, stable=True)
+    indices = indices.gather(-1, by_id)
+    values = values.gather(-1, by_id)
+    by_score = torch.argsort(values, dim=-1, descending=True, stable=True)
+    return values.gather(-1, by_score), indices.gather(-1, by_score)
+
+
 def _rms_norm_reference(
     input_tensor: torch.Tensor,
     weight: torch.Tensor | None,
@@ -195,6 +211,8 @@ def register() -> None:
     if not getattr(original_topk, "_vllm_gaudi_dflash2", False):
 
         def _topk(scores, k):
+            if _enabled_for(scores) and gaudi_envs.VLLM_HPU_DFLASH2_CHUNKED_TOPK and scores.ndim == 2:
+                return _chunked_top_k(scores, k)
             if _enabled_for(scores):
                 return top_k(scores, k, sorted=True, deterministic=True)
             return original_topk(scores, k)

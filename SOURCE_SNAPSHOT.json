@@ -1,5 +1,5 @@
 {
-  "captured_at_utc": "2026-10-13T16:53:07.400246+00:00",
+  "captured_at_utc": "2026-10-14T18:18:33.599647+00:00",
   "source_only": true,
   "components": [
     {
@@ -9943,8 +9943,8 @@
       "bytes": 4481
     },
     "vllm-gaudi/vllm_gaudi/envs.py": {
-      "sha256": "68b6599fc5d3307d0944ad38499e6b957dce3c3df0971ede988e0859240bbfc3",
-      "bytes": 112012
+      "sha256": "259fe426b30ef9b734e5ec319723597a193cb828703d569a549e4a445a2c8c52",
+      "bytes": 114682
     },
     "vllm-gaudi/vllm_gaudi/extension/__init__.py": {
       "sha256": "9cb19ecd3ad381e6466571d13b8b7abe1f2fb5236a40331791f3d26b1360fc4a",
@@ -10175,8 +10175,8 @@
       "bytes": 4597
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_next.py": {
-      "sha256": "1ab608dc91fa86c3d410a00683c31e9ba024fc35b86264e65d3a29264a0545e7",
-      "bytes": 26100
+      "sha256": "a15cf2450898846d432d2d3c1880bd88ff85ffc3c1883522803f073411df4595",
+      "bytes": 28036
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_vl_moe.py": {
       "sha256": "20f0301e661e30260e64dc8e6fe9a46262a2cdc5a2486c0cc6665de3ffb281ea",
@@ -10703,8 +10703,8 @@
       "bytes": 1872
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_dflash2.py": {
-      "sha256": "f553b9dd01bfbdba3b33e2e679ba4f640c527ba00dc9ae9e5c58258d946fa711",
-      "bytes": 6852
+      "sha256": "f889d4aef69e9513b4c76dff0590c47f09cee525561368e58e794b417b6750b9",
+      "bytes": 7699
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_fp8.py": {
       "sha256": "19de426780e1c196937186d341429af61e10be7999873a66da9200b96613124d",
@@ -10907,8 +10907,8 @@
       "bytes": 5501
     },
     "vllm-gaudi/vllm_gaudi/v1/spec_decode/hpu_dflash2.py": {
-      "sha256": "8012bc0afdd27edd4c60239b0a0f2d90f01dcff7babfeffa11bc5b1e0a2e2cb7",
-      "bytes": 20274
+      "sha256": "1868a3e5ba7cbdcdd866eb08dbf20a2ffbdd50f2252ff687adbeb451b82a47c9",
+      "bytes": 22803
     },
     "vllm-gaudi/vllm_gaudi/v1/spec_decode/hpu_eagle.py": {
       "sha256": "e54fd0cb43878e5b2eca46509c528f914d79659a5bcff28897bc7b1da4e971ea",
@@ -10971,8 +10971,8 @@
       "bytes": 5107
     },
     "vllm-gaudi/vllm_gaudi/v1/spec_decode/spec_tensor_regions.py": {
-      "sha256": "1e1f068b6728449a19cf3ac8eff9d0080ed8e09a9d8f6cc277eaf32537c0feb8",
-      "bytes": 5445
+      "sha256": "e4438f343b74a19205562d28672885974f328155e45ae07694d4bf63ad6ee9c6",
+      "bytes": 5608
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/__init__.py": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -11023,8 +11023,8 @@
       "bytes": 39467
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_model_runner.py": {
-      "sha256": "b2f5cf2d11ee7f1cc7b0c5bf2c2ae4345ec47d2171cff4332a065ba3e3ac564e",
-      "bytes": 575052
+      "sha256": "ef041520f241dd286f94b0c7aaf3af2084ba80e06102bba6b6bd2dc64cd29634",
+      "bytes": 586693
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_worker.py": {
       "sha256": "cd837c57e3de99c3ea872d7ae00368b0026bd4cf23ecf86dfac613ddc55675a1",
@@ -38217,6 +38217,26 @@
     "native/mtp-sampling/test_glue.cpp": {
       "sha256": "2b3c858668950c315c05d4e606fbe812c56c8f2a29dd2a7e78cab8ba9783382e",
       "bytes": 2713
+    },
+    "vllm-gaudi/vllm_gaudi/ops/hpu_lm_head_fp8.py": {
+      "sha256": "a8b6280e5ca5cfe1d59f2dceae1251b2503604636551374d4f3e5685d8f90ba8",
+      "bytes": 5595
+    },
+    "vllm-gaudi/vllm_gaudi/v1/sample/fast_topk_topp.py": {
+      "sha256": "0fe0797cf3fd6e549fa5e26e8d3f164e32358edd6148f879b269ef83e9dea357",
+      "bytes": 4448
+    },
+    "vllm-gaudi/vllm_gaudi/v1/spec_decode/dflash_cpu_inputs.py": {
+      "sha256": "67fad3add9c51b996a21631d0b411104f8f8e63089966404c757a222f02b405b",
+      "bytes": 5262
+    },
+    "vllm-gaudi/vllm_gaudi/v1/spec_decode/dflash_draft_stack.py": {
+      "sha256": "ccc94183fd412aee8ec1493dd98f637c042c75dab0a4405964400457b5e7a763",
+      "bytes": 2293
+    },
+    "vllm-gaudi/vllm_gaudi/v1/worker/kiro_v6.py": {
+      "sha256": "ecfbe0b4525b4569fb22271534459b46d11fc8240e7da62ddf3b1b322ab26e3d",
+      "bytes": 32011
     }
   }
 }

@@ -4,6 +4,8 @@
 import torch
 from vllm.v1.sample.ops.topk_topp_sampler import apply_top_k_top_p_pytorch
 
+from vllm_gaudi.v1.sample import fast_topk_topp
+
 
 def constrain_logits(logits, temperature, top_k, top_p):
     batch = temperature.shape[0]
@@ -12,6 +14,8 @@ def constrain_logits(logits, temperature, top_k, top_p):
     logits.div_(temperature[:, None].expand(batch, width).reshape(-1, 1))
     k = None if top_k is None else top_k[:, None].expand(batch, width).reshape(-1)
     p = None if top_p is None else top_p[:, None].expand(batch, width).reshape(-1)
+    if k is not None and fast_topk_topp.is_active():
+        return fast_topk_topp.fast_top_k_top_p(logits, k, p)
     return apply_top_k_top_p_pytorch(logits, k, p)
 
 

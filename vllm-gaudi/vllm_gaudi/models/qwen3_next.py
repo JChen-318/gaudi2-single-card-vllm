@@ -131,10 +131,16 @@ class HpuQwen3DecoderLayerGroup(torch.nn.Module):
         self,
         *,
         positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        residual: torch.Tensor,
+        hidden_states: torch.Tensor | None = None,
+        residual: torch.Tensor | None = None,
         return_state_updates: bool = False,
+        input_ids: torch.Tensor | None = None,
     ):
+        if input_ids is not None:
+            # VLLM_HPU_FUSED_MODEL_ENTRY: the first group also embeds, so the
+            # decode round starts with one compiled region instead of two.
+            hidden_states = self._embed(input_ids)
+            residual = torch.zeros_like(hidden_states)
         if return_state_updates:
             for attention in self._state_layers:
                 attention._hpu_defer_ssm_writeback = True
@@ -222,6 +228,11 @@ def build_hpu_qwen3_layer_groups(
     groups = tuple(groups)
     if groups and final_norm is not None:
         object.__setattr__(groups[-1], "_final_norm", final_norm)
+    embed = getattr(model, "embed_tokens", None)
+    if (groups and gaudi_envs.VLLM_HPU_FUSED_MODEL_ENTRY and embed is not None and 0 not in captures
+            and model.start_layer == 0 and not getattr(model, "_hpu_tp2_defer_embedding_reduce", False)):
+        object.__setattr__(groups[0], "_embed", embed)
+        object.__setattr__(model, "_hpu_group0_embeds", True)
     return groups
 
 
@@ -306,38 +317,54 @@ class HpuQwen3NextModel(UpstreamQwen3NextModel):
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
-        if get_pp_group().is_first_rank:
-            if getattr(self, "_hpu_tp2_defer_embedding_reduce", False) and inputs_embeds is not None:
-                raise RuntimeError("TP2 fused embedding reduction does not support inputs_embeds")
-            hidden_states = inputs_embeds if inputs_embeds is not None else self.embed_input_ids(input_ids)
-            residual = torch.zeros_like(hidden_states)
-        else:
-            assert intermediate_tensors is not None
-            hidden_states = intermediate_tensors["hidden_states"]
-            residual = intermediate_tensors["residual"]
-
-        aux_hidden_states = self._maybe_add_hidden_state([], 0, hidden_states, residual)
         layer_groups = getattr(self, "_hpu_compiled_layer_groups", None)
         attn_metadata = get_forward_context().attn_metadata
+        group0_kwargs = None
+        if (getattr(self, "_hpu_group0_embeds", False) and get_pp_group().is_first_rank and inputs_embeds is None
+                and input_ids is not None and not gaudi_envs.VLLM_HPU_NATIVE_DECODE_GRAPH
+                and not gaudi_envs.VLLM_HPU_TP2_STATIC_GROUP_PLAN
+                and can_use_hpu_qwen3_layer_groups(layer_groups, (), attn_metadata, input_ids.shape[0])):
+            # Embedding runs inside the first compiled group (see build).
+            group0_kwargs = {"input_ids": input_ids}
+            hidden_states = residual = None
+            num_rows = input_ids.shape[0]
+            aux_hidden_states = []
+        else:
+            if get_pp_group().is_first_rank:
+                if getattr(self, "_hpu_tp2_defer_embedding_reduce", False) and inputs_embeds is not None:
+                    raise RuntimeError("TP2 fused embedding reduction does not support inputs_embeds")
+                hidden_states = inputs_embeds if inputs_embeds is not None else self.embed_input_ids(input_ids)
+                residual = torch.zeros_like(hidden_states)
+            else:
+                assert intermediate_tensors is not None
+                hidden_states = intermediate_tensors["hidden_states"]
+                residual = intermediate_tensors["residual"]
+            num_rows = hidden_states.shape[0]
+            aux_hidden_states = self._maybe_add_hidden_state([], 0, hidden_states, residual)
+
         grouped_aux_layers = getattr(self, "_hpu_compiled_group_aux_layers", ())
         use_aux_groups = (bool(self.aux_hidden_state_layers)
                           and grouped_aux_layers == tuple(self.aux_hidden_state_layers)
                           and can_compile_hpu_qwen3_aux_layer_groups(self, 2, 1)
-                          and can_use_hpu_qwen3_layer_groups(layer_groups, (), attn_metadata, hidden_states.shape[0]))
+                          and can_use_hpu_qwen3_layer_groups(layer_groups, (), attn_metadata, num_rows))
         if use_aux_groups:
             # Capture with the upstream helper AFTER the exact decoder boundary.
             # Keep the resulting tensor alive; later layers retain their original
             # KV/checkpoint ownership and the final norm remains outside groups.
             for end_layer, layer_group in zip(self._hpu_compiled_group_end_layers, layer_groups, strict=True):
-                hidden_states, residual = layer_group(
-                    positions=positions, hidden_states=hidden_states, residual=residual)
+                if group0_kwargs is not None:
+                    hidden_states, residual = layer_group(positions=positions, **group0_kwargs)
+                    group0_kwargs = None
+                else:
+                    hidden_states, residual = layer_group(
+                        positions=positions, hidden_states=hidden_states, residual=residual)
                 self._maybe_add_hidden_state(aux_hidden_states, end_layer, hidden_states, residual)
             used_grouped_final_norm = False
         elif can_use_hpu_qwen3_layer_groups(
                 layer_groups,
                 self.aux_hidden_state_layers,
                 attn_metadata,
-                hidden_states.shape[0],
+                num_rows,
         ):
             group_timing = (os.environ.get("HPU_MTP1_GROUP_TIMING", "0").strip().lower() in ("1", "true")
                             and bool(getattr(attn_metadata, "direct_gdn_state", False)) and hidden_states.shape[0] == 2)
@@ -374,11 +401,15 @@ class HpuQwen3NextModel(UpstreamQwen3NextModel):
                         torch.hpu.synchronize()
                         group_started = time.perf_counter()
                     with mtp_phase(f'target_group_{group_index:02d}'):
-                        hidden_states, residual = layer_group(
-                            positions=positions,
-                            hidden_states=hidden_states,
-                            residual=residual,
-                        )
+                        if group0_kwargs is not None:
+                            hidden_states, residual = layer_group(positions=positions, **group0_kwargs)
+                            group0_kwargs = None
+                        else:
+                            hidden_states, residual = layer_group(
+                                positions=positions,
+                                hidden_states=hidden_states,
+                                residual=residual,
+                            )
                     if group_timing:
                         torch.hpu.synchronize()
                         print(

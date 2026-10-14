@@ -20,6 +20,13 @@ from vllm.config import replace
 from vllm_gaudi.utils import async_h2d_copy
 from vllm_gaudi import envs as gaudi_envs
 from vllm_gaudi.v1.spec_decode.dflash_host_prepare import copy_query_inputs, make_cpu_slots, resolved_cpu_pages
+from vllm_gaudi.v1.spec_decode.dflash_cpu_inputs import bucket_context_blocks, prepare_query_cpu_inputs
+
+
+def _defrag_inactive(runner) -> bool:
+    """No block remapping: either no defragmenter or a disabled one (its resolve() is the identity)."""
+    defragmenter = getattr(runner, 'defragmenter', None)
+    return defragmenter is None or not getattr(defragmenter, 'enabled', False)
 from vllm_gaudi.v1.attention.backends.hpu_attn import HPUAttentionMetadataV1
 from vllm_gaudi.v1.spec_decode.hpu_eagle import HpuEagleProposer
 
@@ -54,6 +61,8 @@ class HpuDFlash2Proposer(HpuEagleProposer):
         self._model_api_cache: Any | None = None
         self._host_opt = gaudi_envs.VLLM_HPU_DFLASH2_HOST_OPT
         self._pack_inputs = self._host_opt
+        self._cpu_inputs = gaudi_envs.VLLM_HPU_DFLASH2_CPU_INPUTS
+        self._context_region = gaudi_envs.VLLM_HPU_DFLASH2_CONTEXT_REGION
 
     def _get_eagle3_use_aux_hidden_state_from_config(self) -> bool:
         draft_hf_config = self.draft_model_config.hf_config
@@ -186,7 +195,7 @@ class HpuDFlash2Proposer(HpuEagleProposer):
         """Build a CPU physical-slot tensor from a draft-group block table."""
         if self.block_size <= 0:
             raise RuntimeError("DFlash2 attention backend has not been initialized")
-        if (self._host_opt and getattr(runner, 'defragmenter', None) is None
+        if (self._host_opt and _defrag_inactive(runner)
                 and block_table.device.type == 'cpu' and block_table.dtype in (torch.int32, torch.int64)
                 and len(row_indices) == len(positions)
                 and len({len(row) for row in positions}) <= 1):
@@ -246,7 +255,7 @@ class HpuDFlash2Proposer(HpuEagleProposer):
             first_position = (0 if window is None else max(0, int(context_end) - (window - 1)))
             first_block = first_position // self.block_size
             last_block = (int(context_end) - 1) // self.block_size
-            if (self._host_opt and getattr(runner, 'defragmenter', None) is None
+            if (self._host_opt and _defrag_inactive(runner)
                     and block_table.device.type == 'cpu' and block_table.dtype in (torch.int32, torch.int64)):
                 blocks = resolved_cpu_pages(block_table, int(row), range(first_block, last_block + 1),
                                             int(runner._PAD_BLOCK_ID)).tolist()
@@ -259,6 +268,8 @@ class HpuDFlash2Proposer(HpuEagleProposer):
             context_blocks.append(blocks)
 
         max_blocks = max((len(blocks) for blocks in context_blocks), default=0)
+        if gaudi_envs.VLLM_HPU_DFLASH2_PAGE_BUCKETS:
+            max_blocks = bucket_context_blocks(max_blocks)
         padded_blocks = [blocks + [int(runner._PAD_BLOCK_ID)] * (max_blocks - len(blocks)) for blocks in context_blocks]
         past_width = max_blocks * self.block_size
         context_lens: list[int] = []
@@ -392,6 +403,30 @@ class HpuDFlash2Proposer(HpuEagleProposer):
         if batch_size < real_batch_size:
             raise ValueError(f"padded_batch_size={batch_size} is smaller than real batch {real_batch_size}")
 
+        if (self._cpu_inputs and self._host_opt
+                and _defrag_inactive(runner)
+                and block_table.device.type == 'cpu' and block_table.dtype in (torch.int32, torch.int64)):
+            cpu_inputs = prepare_query_cpu_inputs(
+                block_table, row_indices, query_starts, bonus_token_ids,
+                batch_size=batch_size, query_len=self.num_query_per_req, block_size=self.block_size,
+                mask_token_id=self.mask_token_id, pad_block=int(runner._PAD_BLOCK_ID),
+                pad_slot=int(runner._PAD_SLOT_ID),
+                window=int(self.sliding_window) if self.sliding_window is not None else None,
+                causal=self.dflash_causal, dtype=self.dtype,
+                bucket_blocks=bucket_context_blocks if gaudi_envs.VLLM_HPU_DFLASH2_PAGE_BUCKETS else None)
+            if self._pack_inputs:
+                copied = copy_query_inputs(cpu_inputs, self.device)
+            else:
+                # Preserve the live service's unbatched-copy option and order.
+                order = ('block_list', 'attn_bias', 'context_lens_tensor', 'seq_lens_tensor',
+                         'slot_mapping', 'input_ids', 'positions')
+                copied = {key: async_h2d_copy(cpu_inputs[key], device=self.device)
+                          if cpu_inputs[key] is not None else None for key in order}
+            input_ids, positions = copied.pop('input_ids'), copied.pop('positions')
+            metadata = HPUAttentionMetadataV1.make_prefill_metadata(
+                **copied, window_attn_bias=copied['attn_bias'], block_size=self.block_size, causal=False)
+            return self._run_query_block(input_ids, positions, metadata, runner, real_batch_size)
+
         padded_query_starts = list(query_starts) + [0] * (batch_size - real_batch_size)
         padded_row_indices = list(row_indices) + [-1] * (batch_size - real_batch_size)
 
@@ -431,6 +466,10 @@ class HpuDFlash2Proposer(HpuEagleProposer):
             input_ids = async_h2d_copy(input_ids, device=self.device)
             positions = async_h2d_copy(positions, device=self.device)
 
+        return self._run_query_block(input_ids, positions, metadata, runner, real_batch_size)
+
+    def _run_query_block(self, input_ids, positions, metadata, runner, real_batch_size):
+        batch_size = input_ids.shape[0]
         with runner.profiler.record_event("internal", "dflash2_draft_model"):
             hidden_states = self.model(
                 input_ids=input_ids,
