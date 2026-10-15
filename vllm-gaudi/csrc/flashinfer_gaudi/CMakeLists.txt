@@ -16,6 +16,7 @@ foreach(KERNEL
         gdn_packed_decode_f32_gaudi2
         gdn_mtp_packed_f32_gaudi2
         gdn_mtp_prepared_f32_gaudi2
+        gdn_mtp_fused_f32_gaudi2
         dflash2_select_path_i64_f32_gaudi2
         dflash2_score_select_i64_bf16_f32_gaudi2
         silu_and_mul_bf16_gaudi2
@@ -60,6 +61,7 @@ add_library(
     host/entry_points.cpp
     host/gdn_mtp_packed_f32_gaudi2.cpp
     host/gdn_mtp_prepared_f32_gaudi2.cpp
+    host/gdn_mtp_fused_f32_gaudi2.cpp
     host/gdn_packed_decode_f32_gaudi2.cpp
     host/silu_and_mul_bf16_gaudi2.cpp
     host/silu_mul_quant_bf16_gaudi2.cpp

@@ -8,15 +8,19 @@ route's host-side slot selection, L2 normalisation, `exp(log_decay)` and the pre
 - `gdn_mtp_fused_f32_gaudi2.cpp/.hpp`: glue code that registers the kernel with the TPC kernel library.
 - `gdn_mtp_prepared_f32_gaudi2.c`: the rewritten prepared core (8-row tiles with a shared reduction tree). It
   replaces the kernel of the same name and is used when the fused switch is off.
-- `flashinfer_gaudi/patch_fused_src.py <src_root>`: applies both kernels to a copy of
-  `vllm-gaudi/csrc/flashinfer_gaudi`. It replaces the prepared core and sets its tile height to 8, then adds the
+- Both kernels are already part of `vllm-gaudi/csrc/flashinfer_gaudi` (the copies in this directory are the
+  same files), so `scripts/build_native.sh` builds them. The two patch scripts below are kept for applying the
+  change to another copy of the original sources.
+- `flashinfer_gaudi/patch_fused_src.py <src_root>`: applies both kernels to a copy of the original
+  `csrc/flashinfer_gaudi`. It replaces the prepared core and sets its tile height to 8, then adds the
   fused kernel, its glue and the custom op `custom_op::flashinfer_gaudi_gdn_mtp_fused`. The patched tree is
   byte-identical to the source of the deployed v12 library. Build it as usual: the kernel library with CMake, the
   PyTorch ops with `pytorch/setup.py`.
 - `flashinfer_gaudi/patch_fused_py.py <package_dir>`: makes the Python side of flashinfer_gaudi
   (`_native.py`, `_config.py`, `gdn_decode.py`) route the prepared MTP path through the fused op when
   `FLASHINFER_GAUDI_MTP_FUSED=1`. With the switch off, the original prepared route runs. These three files in
-  `vllm-gaudi/flashinfer_gaudi/` are already patched.
+  `vllm-gaudi/flashinfer_gaudi/` are already patched (and later extended by `FLASHINFER_GAUDI_MTP_FUSED_GATHER`,
+  docs/OPTIMIZATION.md section 15).
 - `device_gdn_test.py <label> [--fused]`: on-device check of the reference, prepared and fused routes on the same
   random inputs. It reports maximum and relative errors for the output and all eight checkpoints, plus device time.
 - `sim/`: TPC-simulator harnesses (cycle counts, no device needed). `gdn_sim.cpp` runs a prepared core and

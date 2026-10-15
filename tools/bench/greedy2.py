@@ -1,8 +1,8 @@
-import json, sys, threading, time, urllib.request
+import json, os, sys, threading, time, urllib.request
 
 # Greedy (temperature=0) outputs over short, long-context and 2-way concurrent requests, to compare numerics
 # before/after a change. Usage: python3 greedy2.py <out.json> [max_tokens] [ctx sizes, comma separated]
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
 SHORT = [
     "用 Python 实现一个线程安全的 LRU 缓存类，支持 get/put/过期时间，并写出完整的 pytest 单元测试。",
     "解释 TCP 三次握手和四次挥手的过程，说明 TIME_WAIT 状态存在的原因，并给出 Linux 下相关内核参数的调优建议。",
@@ -23,10 +23,10 @@ def ctx_prompt(approx):
 
 
 def ask(prompt, max_tokens):
-    body = {"model": "qwen3.8-27b-fp8-mtp", "messages": [{"role": "user", "content": prompt}],
+    body = {"model": os.environ.get("MODEL", "qwen3.8-27b-fp8-mtp"), "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(BASE + "/v1/chat/completions", json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+                                 dict({"Content-Type": "application/json"}, **({"Authorization": "Bearer " + os.environ["API_KEY"]} if os.environ.get("API_KEY") else {})))
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=3600) as r:
         d = json.load(r)

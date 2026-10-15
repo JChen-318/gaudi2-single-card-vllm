@@ -7,7 +7,7 @@ extern unsigned char _binary_gdn_mtp_prepared_f32_gaudi2_o_end;
 
 namespace {
 #ifndef MTP_PREPARED_ROWS
-#define MTP_PREPARED_ROWS 4
+#define MTP_PREPARED_ROWS 8
 #endif
 constexpr unsigned kRows = MTP_PREPARED_ROWS;
 void Map(tpc_lib_api::TensorAccessPattern& pattern, unsigned dim, unsigned indexDim,

@@ -1,10 +1,10 @@
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 
 # Decode speed vs context length. Usage: python3 bench_ctx.py <tag> <approx_prompt_tokens> [max_tokens] [n_parallel=1]
 # Prints prompt_tokens, TTFT, decode tok/s, and ms per speculative round (from /metrics deltas, single client only).
 tag, approx = sys.argv[1], int(sys.argv[2])
 max_tokens = int(sys.argv[3]) if len(sys.argv) > 3 else 400
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
 
 
 def metric(name):
@@ -21,10 +21,10 @@ while sum(len(x) for x in lines) < approx * 3.6:      # ~3.6 chars/token for thi
 prompt = ("Below is a service log.\n\n" + "\n".join(lines) +
           "\n\nWrite a detailed incident-style report in English about what this log shows: workload pattern, slow "
           "stages, retries, and recommendations. Use several paragraphs.")
-body = {"model": "qwen3.8-27b-fp8-mtp", "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens,
+body = {"model": os.environ.get("MODEL", "qwen3.8-27b-fp8-mtp"), "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens,
         "stream": True, "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": False}}
 d0, a0 = metric("vllm:spec_decode_num_drafts_total"), metric("vllm:spec_decode_num_accepted_tokens_total")
-req = urllib.request.Request(BASE + "/v1/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+req = urllib.request.Request(BASE + "/v1/chat/completions", json.dumps(body).encode(), dict({"Content-Type": "application/json"}, **({"Authorization": "Bearer " + os.environ["API_KEY"]} if os.environ.get("API_KEY") else {})))
 t0 = time.perf_counter(); first = last = None; usage = None
 with urllib.request.urlopen(req, timeout=1800) as r:
     for raw in r:

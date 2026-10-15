@@ -1,13 +1,13 @@
 """Speed over diverse prompts: python3 bench_multi.py [max_tokens=512]
 Single client per prompt; rounds and accepted tokens from /metrics deltas."""
-import json
+import json, os
 import sys
 import threading
 import time
 import urllib.request
 
-BASE = "http://127.0.0.1:8000"
-MODEL = "qwen3.8-27b-fp8-mtp"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
+MODEL = os.environ.get("MODEL", "qwen3.8-27b-fp8-mtp")
 MAX_TOKENS = int(sys.argv[1]) if len(sys.argv) > 1 else 512
 
 ARTICLE = ("人工智能芯片的竞争正在从单纯的算力比拼转向系统级的效率竞争。过去几年，训练大模型主要依赖通用图形处理器，"
@@ -63,7 +63,7 @@ def run(tag, prompt, thinking, results):
             "stream": True, "stream_options": {"include_usage": True},
             "chat_template_kwargs": {"enable_thinking": thinking}}
     req = urllib.request.Request(BASE + "/v1/chat/completions", json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+                                 dict({"Content-Type": "application/json"}, **({"Authorization": "Bearer " + os.environ["API_KEY"]} if os.environ.get("API_KEY") else {})))
     t0 = time.perf_counter()
     first = last = None
     usage = None

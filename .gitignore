@@ -20,3 +20,9 @@ dist/
 .graph_dumps/
 .pytest_cache/
 .ruff_cache/
+
+# local install and build outputs (scripts/install.sh, scripts/build_native.sh)
+/.python
+/.venv/
+/build/
+/config/serve.env

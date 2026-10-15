@@ -29,3 +29,10 @@
 ## 2026-10-15 更新（v14）
 
 `vllm-gaudi/flashinfer_gaudi/_config.py` 与 `gdn_decode.py` 按服务器现用 v14 版本更新（融合 GDN 核心先取初始状态，[优化说明](OPTIMIZATION.md) 第 15 节），已与服务器 `/opt` 中的字节核对 SHA-256，清单同步。
+
+## 2026-10-15 整理为可直接使用的工程
+
+- `vllm-gaudi/csrc/flashinfer_gaudi/` 直接包含融合 GDN kernel 和 8 行 prepared 核心（即 `native/gdn-fused-kernel/flashinfer_gaudi/patch_fused_src.py` 的结果），正常编译即得到部署所用的内核库。这 8 个文件从此与服务器 `/opt` 里未打补丁的源码不同，与部署 v12 库时使用的源码逐字节一致。
+- 新增 `scripts/`、`config/`、`requirements/` 与 `docs/INSTALL.md`、`docs/CONFIG.md`；`tools/bench/` 的服务地址、模型名和 API key 改为从环境变量读取。
+- 清单中 `vllm-gaudi/` 下变化或新增文件的哈希已同步。
+- 验证：在实测机器上按 `docs/INSTALL.md` 的步骤，在一个新目录里安装、编译并用 `scripts/serve.sh` 启动（首次预热 1761 秒）。冒烟测试通过，每轮耗时与 v14 相同：单路 26.22 ms，两路 29.94 ms，3 万 token 30.16 ms。之后生产服务直接运行这份安装。

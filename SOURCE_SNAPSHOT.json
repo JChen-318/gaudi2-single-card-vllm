@@ -1,5 +1,5 @@
 {
-  "captured_at_utc": "2026-10-15T13:34:10.876476+00:00",
+  "captured_at_utc": "2026-10-15T14:05:21.798768+00:00",
   "source_only": true,
   "components": [
     {
@@ -4271,8 +4271,8 @@
       "bytes": 6191
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/CMakeLists.txt": {
-      "sha256": "d157da8f9127d0e0b55e8db1544b89dbf13b3e94bf8a1af03c6eabbba0f88d8f",
-      "bytes": 5778
+      "sha256": "3711488491722cf2ee03a079729cadaed01cbdfa3338ae742ecafc7e845e8b32",
+      "bytes": 5849
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/README.md": {
       "sha256": "dce5b6f9495dc8864b217ae03654f5580537a35ad59fbccbb93eca9a3a2e5fd3",
@@ -4327,8 +4327,8 @@
       "bytes": 769
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/host/entry_points.cpp": {
-      "sha256": "af2cff0a6ad1abd50bb05517f0ea6a4cc8b68e90c0b5c2cf6d2087afa3deda19",
-      "bytes": 4588
+      "sha256": "6fae8c948c7768fe8941e7fcc7cbcbd12f0ad60fccf8e7a29723f0e0bab2166a",
+      "bytes": 4910
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/host/gdn_mtp_packed_f32_gaudi2.cpp": {
       "sha256": "fc04c0c3fa2a9122f99f24552f117de4b7a3dcce90b2cd01c01fcd4b4ca6e5c4",
@@ -4339,7 +4339,7 @@
       "bytes": 761
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/host/gdn_mtp_prepared_f32_gaudi2.cpp": {
-      "sha256": "f0d1d72a25058238d1e85a7e3aa27b0d73978d579d428b12e5298afccccbb76b",
+      "sha256": "a48314a89dec7755f6fc8da8b905d549359e596299350f40bafe6e515bcebd37",
       "bytes": 4883
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/host/gdn_mtp_prepared_f32_gaudi2.hpp": {
@@ -4415,8 +4415,8 @@
       "bytes": 8806
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/kernels/gdn_mtp_prepared_f32_gaudi2.c": {
-      "sha256": "403fd13a1a2d0db8c52e04143dc981a8f4918e2b3d29e38b68d14311ce98f323",
-      "bytes": 4400
+      "sha256": "e85f2a0b723bfc1127f0f0058077180df6e8aff1555329db6e4b3cf1e749e006",
+      "bytes": 8048
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/kernels/gdn_packed_decode_f32_gaudi2.c": {
       "sha256": "be16085adaa4f7930991cc6651bce2cc98e9130d5e705d665b3555faacc31344",
@@ -4447,8 +4447,8 @@
       "bytes": 2320
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/pytorch/hpu_flashinfer_gaudi.cpp": {
-      "sha256": "b10235ce1ec7042e365403911e4efee2886b3ea6ead3fb1616f46abfb48a56d3",
-      "bytes": 18205
+      "sha256": "cd31dac95c4bc1986c79f053ebdb823e3cc318af098c2d6b17fa318891aef715",
+      "bytes": 22355
     },
     "vllm-gaudi/csrc/flashinfer_gaudi/pytorch/hpu_flashinfer_norm.cpp": {
       "sha256": "f3c369c7b6c144a0bd6e11b5b7148a2c9eabfb3b7c6d52270963d34e810ea384",
@@ -38241,6 +38241,18 @@
     "vllm-gaudi/vllm_gaudi/v1/worker/kiro_v6.py": {
       "sha256": "ef60d79a705acf9378ce08fcc3672524b88248ec7b6b8354c3635b6c0c481d81",
       "bytes": 38261
+    },
+    "vllm-gaudi/csrc/flashinfer_gaudi/host/gdn_mtp_fused_f32_gaudi2.cpp": {
+      "sha256": "1919eb82101dce81e0d72f729766ee7d1e85231a370fde82583c6f214f3b71c3",
+      "bytes": 4504
+    },
+    "vllm-gaudi/csrc/flashinfer_gaudi/host/gdn_mtp_fused_f32_gaudi2.hpp": {
+      "sha256": "e7a3e9a5baf75c8d4ac78f2303e77c4ec1d4bc1ee314dabdbcaeb0799593f2f6",
+      "bytes": 407
+    },
+    "vllm-gaudi/csrc/flashinfer_gaudi/kernels/gdn_mtp_fused_f32_gaudi2.c": {
+      "sha256": "12da981dd12b1676651cf532b1cad036106e4e5b0232ffe5707a085a37727d54",
+      "bytes": 11650
     }
   }
 }

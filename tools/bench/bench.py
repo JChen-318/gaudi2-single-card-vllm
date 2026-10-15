@@ -1,4 +1,4 @@
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 
 # Streaming chat request; prints TTFT, decode tok/s (from usage), total time.
 # Usage: python3 bench.py <tag> [max_tokens] [prompt_id]
@@ -11,15 +11,15 @@ tag = sys.argv[1]
 max_tokens = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 pid = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 body = {
-    "model": "qwen3.8-27b-fp8-mtp",
+    "model": os.environ.get("MODEL", "qwen3.8-27b-fp8-mtp"),
     "messages": [{"role": "user", "content": PROMPTS[pid]}],
     "max_tokens": max_tokens,
     "stream": True,
     "stream_options": {"include_usage": True},
     "chat_template_kwargs": {"enable_thinking": False},
 }
-req = urllib.request.Request("http://127.0.0.1:8000/v1/chat/completions", json.dumps(body).encode(),
-                             {"Content-Type": "application/json"})
+req = urllib.request.Request(os.environ.get("BASE_URL", "http://127.0.0.1:8000") + "/v1/chat/completions", json.dumps(body).encode(),
+                             dict({"Content-Type": "application/json"}, **({"Authorization": "Bearer " + os.environ["API_KEY"]} if os.environ.get("API_KEY") else {})))
 t0 = time.perf_counter()
 first = last = None
 usage = None

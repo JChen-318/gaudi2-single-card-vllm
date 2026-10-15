@@ -1,6 +1,6 @@
 # 测速与 trace 分析工具
 
-这些脚本只依赖 Python 标准库，在服务器本机对 `127.0.0.1:8000` 的 OpenAI 兼容接口发请求。模型名写的是本地部署用的 `qwen3.8-27b-fp8-mtp`，按需修改。
+这些脚本只依赖 Python 标准库，对 OpenAI 兼容接口发请求。地址、模型名和 API key 从环境变量 `BASE_URL`（默认 `http://127.0.0.1:8000`）、`MODEL`（默认 `qwen3.8-27b-fp8-mtp`）、`API_KEY` 读取；`scripts/bench.sh` 和 `scripts/smoke_test.sh` 会按 `config/serve.env` 自动设置。
 
 ## 测速（`bench/`）
 
