@@ -316,7 +316,7 @@ v11 的设备 trace（单路一轮，带 profiler）：跨度 28.3 ms，设备�
 | 两路并发 | 31.50–31.76 | **30.71–30.73**（290–310 tok/s） |
 | 单路 3 万 token | 33.62 | **32.73** |
 
-整轮只快了约 0.9 ms，比按单次调用推算的 2–4 ms 少，原因还在用 trace 核对。
+整轮只快了约 0.9 ms，比按单次调用推算的 2–4 ms 少，原因见第 15 节。
 
 ## 14. v12c / v13：FP8 KV 缓存，预热从 48 分钟缩短到 23 分钟
 
@@ -351,4 +351,35 @@ v12c 的预热耗时 2887 秒。用 `VLLM_HPU_COMPILE_TIMES=1` 统计编译：Dy
 
 结果：预热 2887 → **1361 秒**（prompt 21.4 → 11.3 分钟，decode 22.5 → 9 分钟），从重启到恢复服务约 28 分钟；运行速度不变（单路 26.8 ms，两路 30.75 ms，3 万 token 30.60 ms）。
 
-剩下的预热基本都是主机端 Python 编译（`compile_inner` 约 1050 秒，500 个图）。`TORCH_LOGS=recompiles` 显示 354 次重新编译：133 次是 token 维从静态转为动态（每个编译区域第一次按固定长度编译，遇到第二种长度时再编一次），提前标记成动态可以省掉（推算约 4–5 分钟，未验证）；约 112 次来自 `block_list` / `block_mapping` 长度 0/1 的特化、`attn_bias` 在 None 与张量之间切换，以及 `attn_bias` 的维度变化，对应的是不同的代码路径；其余来自采样器、GDN prefill 和草稿。Python 端的编译结果无法跨重启复用：PyTorch 的编译缓存只支持 inductor 后端，不支持 `hpu_backend`。启动示例见 [examples/launcher-v13.example.sh](../examples/launcher-v13.example.sh)。
+剩下的预热基本都是主机端 Python 编译（`compile_inner` 约 1050 秒，500 个图）。`TORCH_LOGS=recompiles` 显示 354 次重新编译：133 次是 token 维从静态转为动态（每个编译区域第一次按固定长度编译，遇到第二种长度时再编一次），提前标记成动态可以省掉（推算约 4–5 分钟，未验证）；约 112 次来自 `block_list` / `block_mapping` 长度 0/1 的特化、`attn_bias` 在 None 与张量之间切换，以及 `attn_bias` 的维度变化，对应的是不同的代码路径；其余来自采样器、GDN prefill 和草稿。Python 端的编译结果无法跨重启复用：PyTorch 的编译缓存只支持 inductor 后端，不支持 `hpu_backend`。启动示例见 [examples/launcher-v14.example.sh](../examples/launcher-v14.example.sh)。
+
+## 15. v14：去掉融合 GDN kernel 之后的检查点复制
+
+第 13 节的融合 kernel 整轮只快了约 0.9 ms。对比 v11 与 v12 的设备 trace（单路，每轮）：
+
+| | v11 | v12 |
+|---|---:|---:|
+| GDN 核心 | 4.62 ms | 3.36 ms |
+| `out_proj` GEMM | 0.73 | 1.17 |
+| 内部 DMA 复制 | 0.48 | 2.41 |
+| 设备忙合计 | 23.09 | 22.49 |
+
+融合 kernel 本身达到预期（每层 62 → 44 µs），但每个 GDN 层在它之后多了一次约 25 MB 的内部 DMA 复制，把 8 个检查点从 kernel 输出拷进状态池。这些复制与紧接着的 norm、量化和 `out_proj` GEMM 同时进行，争用 HBM 带宽：这几个节点都慢了约 1.5 倍（GEMM 每次 15 → 23 µs），两路时 MLP 也被拖慢。
+
+原因：prepared 路线先 `index_select` 取出初始状态，kernel 不读状态池，图编译器可以让 kernel 直接把检查点写进池里；融合 kernel 在内部按槽位读 `state_pool`，同一个张量既被读又被写，编译器只能先写临时缓冲再复制。
+
+| 开关 | 做什么 |
+|---|---|
+| `FLASHINFER_GAUDI_MTP_FUSED_GATHER`（默认开） | 融合路线先 `index_select` 取出各请求的初始状态，作为 kernel 的「池」传入，槽位索引都指向本请求自己那一行。kernel 计算不变，状态池在这一步只被写入 |
+
+结果（生产配置，每轮中位数）：
+
+| 场景 | v13 | v14 |
+|---|---:|---:|
+| 单路短上下文 | 26.81 ms | **26.17 / 26.28** |
+| 两路并发 | 30.75 | **29.69**（312 tok/s） |
+| 单路 3 万 token | 30.60 | **30.17** |
+
+greedy 输出与之前一致。离线验证用一个与 kernel 约定相同的 Python 替身，确认两条路线的输出和状态池逐位相同（`validation/test_v13_fused_gather.py`）。
+
+同时打开了 Dynamo 本地 PGO（`TORCH_COMPILE_JOB_ID` + `TORCHINDUCTOR_CACHE_DIR`）：每次编译后把各函数哪些维度是动态的写到磁盘，下次启动时第一次编译就按动态形状进行，预计可省掉第 14.2 节那 133 次「静态转动态」的重新编译。效果要到下一次重启才能确认，未验证。这次 GDN 相关的图有变化，设备端 recipe 需要重新编译，预热 1539 秒。

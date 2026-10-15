@@ -1,5 +1,5 @@
 #!/bin/sh
-# Example launcher for the v13 production configuration in docs/OPTIMIZATION.md (single Gaudi2,
+# Example launcher for the v14 production configuration in docs/OPTIMIZATION.md (single Gaudi2,
 # Qwen3.5-architecture 27B FP8 target + DFlash2 drafter, up to 2 concurrent requests, 2 x 262K context with an FP8 KV cache, no profiler).
 #
 # This is a record of one working setup, not a portable installer: every path below is site-specific, the native
@@ -51,6 +51,8 @@ exec env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_DFLASH2_EARLY_READBACK=1 \
   VLLM_HPU_PIN_MAIN_CPU=10 \
   VLLM_HPU_WARMUP_PHASE_GC=1 \
+  TORCH_COMPILE_JOB_ID=qwen38-dflash2 \
+  TORCHINDUCTOR_CACHE_DIR="$RUN_DIR/torch-cache" \
   VLLM_HPU_COMPILE_TIMES=1 \
   VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE=1 \
   VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA=1 \
@@ -74,6 +76,7 @@ exec env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   FLASHINFER_GAUDI_ENABLE_MTP_PREPARED=true \
   FLASHINFER_GAUDI_MTP_PREPARED_MAX_BATCH=2 \
   FLASHINFER_GAUDI_MTP_FUSED=1 \
+  FLASHINFER_GAUDI_MTP_FUSED_GATHER=1 \
   FLASHINFER_GAUDI_MTP_TRACE=0 \
   FLASHINFER_GAUDI_ENABLE_MTP5_T6=0 \
   VLLM_HPU_MTP_CHAIN_COMPILE=0 \
@@ -155,3 +158,7 @@ exec env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
 #   VLLM_HPU_WARMUP_PHASE_GC=1 skips the full gc.collect() around every warm-up bucket (48 -> 23 minutes);
 #   VLLM_HPU_COMPILE_TIMES=1 logs where warm-up compile time went. Add TORCH_LOGS=recompiles to see why each
 #   Dynamo recompile happened.
+# - v14 (docs/OPTIMIZATION.md section 15): FLASHINFER_GAUDI_MTP_FUSED_GATHER (on by default) gathers the initial
+#   states before the fused GDN core, which removes a per-layer checkpoint copy. TORCH_COMPILE_JOB_ID plus
+#   TORCHINDUCTOR_CACHE_DIR turn on Dynamo's local PGO: dims found dynamic in one run are compiled dynamic
+#   from the start in the next.

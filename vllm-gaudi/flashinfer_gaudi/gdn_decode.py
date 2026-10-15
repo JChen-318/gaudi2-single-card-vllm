@@ -11,7 +11,7 @@ import torch
 
 from flashinfer_gaudi._dispatch import BackendUnavailableError as BackendUnavailableError
 from flashinfer_gaudi._dispatch import require_reference_allowed
-from flashinfer_gaudi._config import get_backend_policy, mtp_fused_enabled, mtp_prepared_enabled
+from flashinfer_gaudi._config import get_backend_policy, mtp_fused_enabled, mtp_fused_gather_enabled, mtp_prepared_enabled
 from flashinfer_gaudi._native import (
     public_mtp_fused_op,
     public_mtp_gdn_op,
@@ -450,8 +450,18 @@ def _gated_delta_rule_mtp_fused(
     if (checkpoint_start is not None and (not assume_distinct_checkpoints or checkpoint_start < 1
                                           or checkpoint_start + batch * tokens > state_pool.shape[0])):
         raise ValueError("Direct checkpoints require a valid, distinct, caller-proven contiguous destination.")
-    output, checkpoints = native(state_pool, packed_qkv, log_decay, beta, state_indices,
-                                 num_accepted_tokens.reshape(batch))
+    if mtp_fused_gather_enabled():
+        # Hand the kernel the gathered initial states as its pool, with every slot of row b
+        # pointing at b. The real pool is then only written (below), so the graph compiler
+        # can place the checkpoints in it directly instead of copying them after the kernel.
+        offsets = num_accepted_tokens.long().clamp(1, tokens) - 1
+        loads = state_indices.gather(1, offsets.unsqueeze(1)).squeeze(1).long()
+        source = state_pool.index_select(0, loads)
+        slots = torch.arange(batch, dtype=state_indices.dtype, device=state_indices.device)
+        slots = slots.unsqueeze(1).expand(batch, tokens).contiguous()
+    else:
+        source, slots = state_pool, state_indices
+    output, checkpoints = native(source, packed_qkv, log_decay, beta, slots, num_accepted_tokens.reshape(batch))
     if checkpoint_start is not None:
         state_pool.narrow(0, checkpoint_start, batch * tokens).copy_(checkpoints.reshape(-1, 48, 128, 128))
     elif assume_distinct_checkpoints:

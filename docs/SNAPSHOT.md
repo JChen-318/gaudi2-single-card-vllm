@@ -25,3 +25,7 @@
 `vllm-gaudi/vllm_gaudi/` 下 5 个文件（`envs.py`、`models/qwen3_next.py`、`v1/worker/hpu_model_runner.py`、`kiro_v6.py`、`kiro_v11.py`）和 `vllm-gaudi/flashinfer_gaudi/` 下 3 个文件（`_native.py`、`_config.py`、`gdn_decode.py`）按服务器现用 v13 版本更新，均与服务器 `/opt` 中的字节核对过 SHA-256，对应 [优化说明](OPTIMIZATION.md) 第 12–14 节。清单中的哈希与 `captured_at_utc` 已同步。
 
 `native/gdn-fused-kernel/` 是新增源码，不在快照清单中。`vllm-gaudi/csrc/flashinfer_gaudi/` 保持服务器原样；部署的 v12 内核库是在它的副本上运行 `native/gdn-fused-kernel/flashinfer_gaudi/patch_fused_src.py` 后编译的，打补丁后的源码树与部署时使用的逐字节一致。
+
+## 2026-10-15 更新（v14）
+
+`vllm-gaudi/flashinfer_gaudi/_config.py` 与 `gdn_decode.py` 按服务器现用 v14 版本更新（融合 GDN 核心先取初始状态，[优化说明](OPTIMIZATION.md) 第 15 节），已与服务器 `/opt` 中的字节核对 SHA-256，清单同步。
