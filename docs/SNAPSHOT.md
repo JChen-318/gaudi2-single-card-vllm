@@ -36,3 +36,7 @@
 - 新增 `scripts/`、`config/`、`requirements/` 与 `docs/INSTALL.md`、`docs/CONFIG.md`；`tools/bench/` 的服务地址、模型名和 API key 改为从环境变量读取。
 - 清单中 `vllm-gaudi/` 下变化或新增文件的哈希已同步。
 - 验证：在实测机器上按 `docs/INSTALL.md` 的步骤，在一个新目录里安装、编译并用 `scripts/serve.sh` 启动（首次预热 1761 秒）。冒烟测试通过，每轮耗时与 v14 相同：单路 26.22 ms，两路 29.94 ms，3 万 token 30.16 ms。之后生产服务直接运行这份安装。
+
+## 2026-10-15 更新（v15）
+
+新增 `vllm-gaudi/vllm_gaudi/extension/dense_decode_attn.py`，修改 `envs.py`、`extension/ops.py`、`attention/ops/hpu_paged_attn.py` 和 `scripts/serve.sh`（整段计算的共享前缀注意力，[优化说明](OPTIMIZATION.md) 第 17 节）。均与生产服务所用安装（本仓库的一份副本）逐字节核对过，清单已同步。

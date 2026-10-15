@@ -9,6 +9,7 @@ from typing import Optional
 
 import torch
 from vllm_gaudi.extension import cache_ops, ops
+import vllm_gaudi.envs as gaudi_envs
 from vllm.v1.attention.backend import AttentionMetadataBuilder
 
 # Should be the same as PARTITION_SIZE in `paged_attention_v2_launcher`.
@@ -101,6 +102,8 @@ class HPUPagedAttention:
         block_bias = kwargs.get("block_bias")
         if block_bias is not None and block_bias.dim() == 3:
             # [pages, query width, block_size]: one shared page list per request.
+            if gaudi_envs.VLLM_HPU_SHARED_PREFIX_ATTN == "dense":
+                return ops.flat_pa_query_dense(**kwargs)
             return ops.flat_pa_query_block(**kwargs)
         return ops.flat_pa(**kwargs)
 

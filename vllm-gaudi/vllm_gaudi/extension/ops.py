@@ -436,6 +436,23 @@ def flat_pa_query_block(query, key_cache, value_cache, block_list, block_mapping
     return attn.transpose(1, 2).contiguous().view(batch_size * width, q_heads, head_size)
 
 
+def flat_pa_query_dense(query, key_cache, value_cache, block_list, block_bias, block_groups, block_size, scale,
+                        position_bias=None, sinks=None, k_scales=None, v_scales=None, **ignored_args):
+    """flat_pa_query_block's contract, computed over each request's whole context at once.
+
+    See extension/dense_decode_attn.py. Same inputs and output layout; the page-wise softmax bookkeeping, the
+    per-page copies of the query and the per-page partial outputs go away.
+    """
+    if (sinks is not None or position_bias is not None or k_scales is not None or v_scales is not None
+            or gaudi_envs.VLLM_HPU_TP2_GQA_COMPACT_KV or gaudi_envs.VLLM_HPU_GQA_COMPACT_KV
+            or gaudi_envs.VLLM_HPU_GQA_NATIVE_MATMUL or gaudi_envs.VLLM_HPU_PAGED_KV_DUAL_GATHER):
+        raise NotImplementedError("Dense shared-prefix decode attention supports only the plain paged-attention path")
+    from vllm_gaudi.extension.dense_decode_attn import dense_query_block_attention
+    return dense_query_block_attention(query, key_cache, value_cache, block_list, block_bias, block_groups,
+                                       block_size, scale, qk=gaudi_envs.VLLM_HPU_DENSE_ATTN_QK,
+                                       av=gaudi_envs.VLLM_HPU_DENSE_ATTN_AV)
+
+
 def _flex_prompt_attention(
     query: torch.Tensor,
     key: torch.Tensor,

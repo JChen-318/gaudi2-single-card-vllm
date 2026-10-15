@@ -45,6 +45,7 @@ decode 分桶由 `serve.sh` 根据配置计算：batch 取 1 到 `MAX_NUM_SEQS`�
 | `VLLM_HPU_DFLASH2_EARLY_READBACK` | 采样结果在流内拷到固定内存，提前读回 | 12 |
 | `VLLM_HPU_PIN_MAIN_CPU` | 引擎线程绑核（由 `PIN_MAIN_CPU` 设置） | 12 |
 | `FLASHINFER_GAUDI_MTP_FUSED`、`FLASHINFER_GAUDI_MTP_FUSED_GATHER` | 融合 GDN 验证核心；先取初始状态，避免每层多一次检查点复制 | 13、15 |
+| `VLLM_HPU_SHARED_PREFIX_ATTN=dense`（`VLLM_HPU_DENSE_ATTN_QK` / `_AV`） | 全注意力对每个请求的整段上下文做一次 softmax，KV 只 gather 一次；QK/AV 用 FP8 | 17 |
 | `--kv-cache-dtype fp8_inc`（同时 `env -u QUANT_CONFIG`） | FP8 KV 缓存，不校准 | 14 |
 | `VLLM_HPU_WARMUP_PHASE_GC` | 预热时不在每个分桶前后强制 `gc.collect()` | 14 |
 | `TORCH_COMPILE_JOB_ID` + `TORCHINDUCTOR_CACHE_DIR` | Dynamo 本地 PGO：记住哪些维度是动态的，下次启动直接按动态编译 | 15 |

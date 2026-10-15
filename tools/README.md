@@ -10,6 +10,7 @@
 | `bench_ctx.py <tag> <近似 token 数> [max_tokens]` | 日志类长提示词；额外输出提示词 token 数、每轮耗时、每轮接受数 |
 | `greedy2.py <out.json> [max_tokens] [sizes]` | `temperature=0` 输出集合：短提示词、长上下文、2 路并发 |
 | `gcmp.py <a.json> <b.json>` | 比较两份 `greedy2.py` 输出，给出公共前缀长度 |
+| `needle.py <近似 token 数> [位置...]` | 长上下文检索检查：在日志类长文本的指定位置（比例，默认 0.05 / 0.5 / 0.95）藏一个 6 位口令，`temperature=0` 下问答，统计答对数 |
 | `bench_multi.py [max_tokens]` | 15 类提示词（中英文解释与写作、多种代码、数学、翻译、摘要、JSON、表格、思考模式、复述）逐条单路测速，再测 3 组两路并发；输出每轮接受草稿数和每轮耗时 |
 
 说明：

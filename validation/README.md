@@ -5,7 +5,7 @@
 被测代码按 AST 从本仓库的源码文件里抽出来执行（`vllm-gaudi/vllm_gaudi/extension/ops.py`、`.../v1/worker/hpu_model_runner.py` 等），不是另写的副本，所以测的就是发布的那份文本。
 
 ```bash
-python -m pytest -q validation        # 在仓库根目录执行，约 3.5 分钟，2633 项
+python -m pytest -q validation        # 在仓库根目录执行，约 3.5 分钟，2651 项
 ```
 
 | 文件 | 覆盖内容 |
@@ -24,6 +24,7 @@ python -m pytest -q validation        # 在仓库根目录执行，约 3.5 分�
 | `test_v11_thread_isolation.py` | 引擎线程隔离（`VLLM_HPU_PIN_MAIN_CPU`）：主线程固定到指定核，其余线程全部避开该核及其超线程兄弟，之后新建的线程在刷新时挪开；核不可用时不做任何绑定 |
 | `test_v11_compile_timers.py` | 预热编译时间分解（`VLLM_HPU_COMPILE_TIMES`）：包住 Habana 后端各 pass 和 Synapse 图编译并在日志中汇总；后端不存在时不启用（用替身模块） |
 | `test_v13_fused_gather.py` | 融合 GDN 核心先取初始状态（`FLASHINFER_GAUDI_MTP_FUSED_GATHER`）：用与 kernel 约定相同的 Python 替身，两条路线的输出与状态池逐位相同（单/两路、接受数含 0 与超过 8、直接写检查点与 index_copy 两种写法）；kernel 只拿到选中的行，槽位指向本行；默认开启 |
+| `test_dense_decode_attn.py` | 整段计算的共享前缀注意力（`VLLM_HPU_SHARED_PREFIX_ATTN=dense`）：用生产的页表、归属与可见性生成方式，FP8/BF16 缓存、4 种矩阵乘精度组合与 float64 因果注意力参考一致；补齐的请求行输出为 0 且无 NaN；改动另一个请求的页不影响本请求 |
 | `test_v13_warmup_gc.py` | 预热按阶段 gc（`VLLM_HPU_WARMUP_PHASE_GC`）：每个分桶只读显存增量、不调用 `gc.collect()`，出错时也能退出；runner 中开关与阶段前后各一次 gc 的接入，默认关闭 |
 
 `dynamo/` 下是两个断图的复现与检查脚本，需要与服务器同主版本的 torch（这里用的是 2.11）：

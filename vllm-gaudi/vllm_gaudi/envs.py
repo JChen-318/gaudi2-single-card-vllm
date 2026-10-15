@@ -1929,6 +1929,13 @@ environment_variables["VLLM_HPU_COMPILE_TIMES"] = lambda: os.environ.get(
 # (~3 s each with hundreds of compiled graphs); collect once per warmup phase instead.
 environment_variables["VLLM_HPU_WARMUP_PHASE_GC"] = lambda: os.environ.get(
     "VLLM_HPU_WARMUP_PHASE_GC", "0").lower() in ("1", "true")
+# Shared-prefix decode attention: "block" (page-wise, flat_pa_query_block) or "dense" (each request's pages
+# gathered once, one masked softmax over the whole context; extension/dense_decode_attn.py). With an FP8 KV
+# cache the QK / AV matmuls of the dense path run in "fp8" or "bf16".
+environment_variables["VLLM_HPU_SHARED_PREFIX_ATTN"] = lambda: os.environ.get(
+    "VLLM_HPU_SHARED_PREFIX_ATTN", "block").strip().lower()
+environment_variables["VLLM_HPU_DENSE_ATTN_QK"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_QK", "fp8").strip().lower()
+environment_variables["VLLM_HPU_DENSE_ATTN_AV"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_AV", "fp8").strip().lower()
 # Engine thread on its own physical core after warmup (cpu id; -1 = off).
 environment_variables["VLLM_HPU_PIN_MAIN_CPU"] = lambda: int(os.environ.get("VLLM_HPU_PIN_MAIN_CPU", "-1"))
 # Diagnostics: step-timer marks after the model entry region and every decoder group.
