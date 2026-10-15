@@ -24,9 +24,10 @@ FP8 · 非 greedy 投机解码 · 长上下文 · OpenAI 兼容接口
 - **长上下文优化**：验证 token 共用历史 KV 前缀，减少重复读取；扩展解码分桶覆盖范围。
 - **主机与设备流水重叠**：按预测提前提交下一轮主模型和采样，紧接着用设备上的采样结果提交该轮草稿，不等主机读回；下一步核对一致后直接复用，下一轮输入增量生成，两路并发同样适用。
 - **更轻的主机准备**：向量化生成索引和页表，编译区域独立代码对象、草稿模型整体编译，减少缓存查找与零散提交。
-- **更少的设备时间**：采样和草稿候选不再对整个词表排序，词表投影使用 FP8，GDN 检查点直接写入状态池。
+- **更少的设备时间**：采样和草稿候选不再对整个词表排序，词表投影使用 FP8，GDN 检查点直接写入状态池；重写的 [GDN 递推 TPC kernel](native/gdn-fused-kernel/) 把准备步骤并入 kernel，跨通道归约共用一棵归约树。
+- **FP8 KV 缓存**：同样的显存放下 52.7 万 token（两个 256K 请求），长上下文每轮更快。
 - **专用采样扩展**：提供 HPU 随机拒绝纠正与输出打包源码，衔接投机验证后的生成流程。
-- **编译结果缓存**：单文件 TPC 内核库转接层让多个内核库可以配合 `PT_HPU_RECIPE_CACHE_CONFIG` 使用。
+- **编译结果缓存与更短的预热**：单文件 TPC 内核库转接层让多个内核库可以配合 `PT_HPU_RECIPE_CACHE_CONFIG` 使用；预热不再在每个分桶前后强制 gc，从 48 分钟缩短到 23 分钟。
 - **熟悉的服务接口**：沿用 vLLM 的 OpenAI 兼容接口，提供工具调用配置示例。
 
 ## 性能概览
@@ -42,9 +43,9 @@ FP8 · 非 greedy 投机解码 · 长上下文 · OpenAI 兼容接口
 | 单路约 3 万 token 上下文 | 约 79 token/s |
 | 单路约 8.6 万 token 上下文（v5 时测量） | 47.6 token/s |
 
-每轮验证的耗时在各类提示词上都稳定在 27.6–28.1 ms（单路短上下文；v10 为 30.5–33 ms，v5 为 42.3 ms），两路并发每轮 31.9 ms（v10 为 35.0 ms，v5 为 52.2 ms），3 万 token 上下文每轮 33.7 ms（v10 为 37.3 ms，v5 为 48–51 ms）。不同内容的速度差别主要来自草稿接受率：代码和结构化输出每轮可接受 3.6–6.8 个草稿 token，自然语言约 1.3–2.2 个，中文散文类创作更低。完整测试条件、逐项拆分和前后对照见 [优化说明](docs/OPTIMIZATION.md)。
+表中吞吐来自 v11。每轮验证的耗时在各类提示词上都稳定在 27.6–28.1 ms（单路短上下文；v10 为 30.5–33 ms，v5 为 42.3 ms），两路并发每轮 31.9 ms（v10 为 35.0 ms，v5 为 52.2 ms），3 万 token 上下文每轮 33.7 ms（v10 为 37.3 ms，v5 为 48–51 ms）。当前 v13 生产配置（GDN kernel 重写 + FP8 KV 缓存）进一步降到单路 26.7–26.8 ms、两路 30.7 ms、3 万 token 30.6 ms，约 10 万 token 上下文每轮 38.5 ms（约 75 token/s）。不同内容的速度差别主要来自草稿接受率：代码和结构化输出每轮可接受 3.6–6.8 个草稿 token，自然语言约 1.3–2.2 个，中文散文类创作更低。完整测试条件、逐项拆分和前后对照见 [优化说明](docs/OPTIMIZATION.md)。
 
-这些数字采用流式 decode 口径，不是整请求吞吐；任务、草稿接受率和硬件环境都会影响结果。**上下文配置上限为 262,144 token，当前最长实测约 8.6 万 token**，不把外推结果当成实测成绩。
+这些数字采用流式 decode 口径，不是整请求吞吐；任务、草稿接受率和硬件环境都会影响结果。**上下文配置上限为单请求 262,144 token（FP8 KV 缓存可同时容纳两个），当前最长实测约 10 万 token**，不把外推结果当成实测成绩。
 
 ## 开始使用
 
@@ -55,7 +56,7 @@ cd gaudi2-single-card-vllm
 
 1. 准备版本匹配的 Gaudi 软件栈和 HPU 版 PyTorch，参考 [Gaudi 插件说明](vllm-gaudi/README.md) 与 [vLLM 主程序说明](vllm-core/README.md)。
 2. 按目标 SDK 构建需要的算子、[本地采样扩展](native/mtp-sampling/) 和 [内核库转接层](native/tpc-kernel-shim/)（使用编译缓存时需要）。仓库不包含编译好的动态库或模型权重。
-3. 修改 [启动示例](examples/launcher-v11.example.sh) 中的模型、库和日志路径，先验证短请求，再进行完整预热与测速。较早的 [v10](examples/launcher-v10.example.sh) 和 [v5](examples/launcher-v5.example.sh) 示例保留作对照。
+3. 修改 [启动示例](examples/launcher-v13.example.sh) 中的模型、库和日志路径，先验证短请求，再进行完整预热与测速。较早的 [v11](examples/launcher-v11.example.sh)、[v10](examples/launcher-v10.example.sh) 和 [v5](examples/launcher-v5.example.sh) 示例保留作对照。
 
 这是多组件源码工程，不能直接在仓库根目录 `pip install`。示例来自特定部署环境，需要按本机配置调整；诊断和跳过预热选项不应作为正式测速配置。
 
@@ -66,6 +67,7 @@ vllm-core/           配套 vLLM 主程序
 vllm-gaudi/          Gaudi 插件、FlashInfer-Gaudi 与设备算子
 native/mtp-sampling/ 本地随机采样扩展
 native/tpc-kernel-shim/ 单文件 TPC 内核库转接层
+native/gdn-fused-kernel/ 融合 GDN 递推 TPC kernel、模拟器测试与 FlashInfer-Gaudi 补丁
 examples/           启动配置示例
 validation/         离线验证与编译问题复现
 tools/              测速和 trace 分析工具

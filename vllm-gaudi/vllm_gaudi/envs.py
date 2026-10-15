@@ -1920,6 +1920,20 @@ environment_variables["VLLM_HPU_GUARD_SKIP"] = lambda: os.environ.get(
 environment_variables["VLLM_HPU_GUARD_SKIP_WARM"] = lambda: int(os.environ.get(
     "VLLM_HPU_GUARD_SKIP_WARM", "3"))
 environment_variables["VLLM_HPU_RNG_POOL"] = lambda: int(os.environ.get("VLLM_HPU_RNG_POOL", "0"))
+environment_variables["VLLM_HPU_DFLASH2_EARLY_READBACK"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_EARLY_READBACK", "0").lower() in ("1", "true")
+# Log where warmup compile time goes (Dynamo, Habana backend passes, Synapse compile).
+environment_variables["VLLM_HPU_COMPILE_TIMES"] = lambda: os.environ.get(
+    "VLLM_HPU_COMPILE_TIMES", "0").lower() in ("1", "true")
+# Warmup: measure per-bucket memory without a full gc.collect() on entry/exit
+# (~3 s each with hundreds of compiled graphs); collect once per warmup phase instead.
+environment_variables["VLLM_HPU_WARMUP_PHASE_GC"] = lambda: os.environ.get(
+    "VLLM_HPU_WARMUP_PHASE_GC", "0").lower() in ("1", "true")
+# Engine thread on its own physical core after warmup (cpu id; -1 = off).
+environment_variables["VLLM_HPU_PIN_MAIN_CPU"] = lambda: int(os.environ.get("VLLM_HPU_PIN_MAIN_CPU", "-1"))
+# Diagnostics: step-timer marks after the model entry region and every decoder group.
+environment_variables["VLLM_HPU_V11_GROUP_MARKS"] = lambda: os.environ.get(
+    "VLLM_HPU_V11_GROUP_MARKS", "0").lower() in ("1", "true")
 
 environment_variables['VLLM_HPU_MTP_METADATA_POOL'] = lambda: os.environ.get(
     'VLLM_HPU_MTP_METADATA_POOL', '0') == '1'

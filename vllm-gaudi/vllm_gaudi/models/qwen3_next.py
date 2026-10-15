@@ -351,13 +351,17 @@ class HpuQwen3NextModel(UpstreamQwen3NextModel):
             # Capture with the upstream helper AFTER the exact decoder boundary.
             # Keep the resulting tensor alive; later layers retain their original
             # KV/checkpoint ownership and the final norm remains outside groups.
-            for end_layer, layer_group in zip(self._hpu_compiled_group_end_layers, layer_groups, strict=True):
+            group_timer = getattr(self, "_hpu_group_timer", None)  # VLLM_HPU_V11_GROUP_MARKS
+            for index, (end_layer, layer_group) in enumerate(
+                    zip(self._hpu_compiled_group_end_layers, layer_groups, strict=True)):
                 if group0_kwargs is not None:
                     hidden_states, residual = layer_group(positions=positions, **group0_kwargs)
                     group0_kwargs = None
                 else:
                     hidden_states, residual = layer_group(
                         positions=positions, hidden_states=hidden_states, residual=residual)
+                if group_timer is not None:
+                    group_timer.mark(f"g{index:02d}")
                 self._maybe_add_hidden_state(aux_hidden_states, end_layer, hidden_states, residual)
             used_grouped_final_norm = False
         elif can_use_hpu_qwen3_layer_groups(

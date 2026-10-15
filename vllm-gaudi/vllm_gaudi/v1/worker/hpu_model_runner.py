@@ -5,6 +5,7 @@ import copy
 import contextlib
 from copy import deepcopy
 import functools
+import gc
 from functools import partial, wraps
 import itertools
 import math
@@ -1499,6 +1500,9 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
                                                   input_ids.device, self.dtype, model_has_chunked_attention,
                                                   kwargs['positions'])
             rotary_done = True
+            entry_timer = getattr(self, '_hpu_entry_timer', None)  # VLLM_HPU_V11_GROUP_MARKS
+            if entry_timer is not None:
+                entry_timer.mark("x")
         else:
             rotary_done = False
         if ('attn_metadata' in kwargs and not self.pooling_model and not framework_attn_metadata
@@ -2165,11 +2169,18 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                             if gaudi_envs.VLLM_HPU_GUARD_SKIP else None)
         if gaudi_envs.VLLM_HPU_RNG_POOL > 0:
             kiro_v11.RNG_POOL = kiro_v11.RngPool(gaudi_envs.VLLM_HPU_RNG_POOL)
+        self._thread_isolation = (kiro_v11.ThreadIsolation(gaudi_envs.VLLM_HPU_PIN_MAIN_CPU)
+                                  if gaudi_envs.VLLM_HPU_PIN_MAIN_CPU >= 0 else None)
+        self._compile_timers = None
+        if gaudi_envs.VLLM_HPU_COMPILE_TIMES:
+            self._compile_timers = kiro_v11.CompileTimers()
+            self._compile_timers.install()
         self._draft_profiler = None
         self._dflash_lookahead = (kiro_v6.DFlashLookahead(
             self, gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE, gaudi_envs.VLLM_HPU_V6_PROFILE_PREP,
             gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA else None,
-            gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT else None)
+            gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT else None,
+            16 if gaudi_envs.VLLM_HPU_DFLASH2_EARLY_READBACK else None)
                                   if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD
                                   and self.speculative_config is not None and self.speculative_config.use_dflash()
                                   else None)
@@ -6354,6 +6365,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
 
         if self._step_timer is not None and not warmup_mode:
             self._step_timer.mark("E", -1, -1, scheduler_output.total_num_scheduled_tokens)
+            if gaudi_envs.VLLM_HPU_V11_GROUP_MARKS and not getattr(self, '_v11_marks_installed', False):
+                self._install_group_marks()
         self.run_defragmenter(scheduler_output, warmup_mode)
 
         batch_changed = self._update_states(scheduler_output)
@@ -6585,6 +6598,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         v6_active = self._v6_control.refresh() if batch_changed else self._v6_control.active
         if kiro_v11.RNG_POOL is not None:
             kiro_v11.RNG_POOL.active = v6_active["rng_pool"]
+        if self._thread_isolation is not None and not warmup_mode and batch_changed:
+            # First steady step after warmup pins; later batch changes move new threads off the core.
+            self._thread_isolation.apply()
+            self._thread_isolation.refresh()
         if gaudi_envs.VLLM_HPU_FAST_TOPK_TOPP:
             from vllm_gaudi.v1.sample import fast_topk_topp
             batch = self.input_batch
@@ -6881,9 +6898,16 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                             decode_sampled_token_ids, sampled_token_ids = self._parse_mtp_target_output(
                                 sampled_token_ids, decode_data, num_decodes, warmup_mode)
                         else:
+                            parse_source = sampled_token_ids
+                            if (lookahead_sampled is not None and sampled_token_ids is lookahead_sampled
+                                    and self._dflash_lookahead is not None):
+                                # VLLM_HPU_DFLASH2_EARLY_READBACK: copied before the pre-draft was queued.
+                                early = self._dflash_lookahead.pop_sampled_cpu(sampled_token_ids)
+                                if early is not None:
+                                    parse_source = early
                             decode_sampled_token_ids = \
                                 self.rejection_sampler.parse_output(
-                                    sampled_token_ids,
+                                    parse_source,
                                     self.input_batch.vocab_size,
                             )
                         if isinstance(decode_sampled_token_ids, tuple):
@@ -8140,6 +8164,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         developer_settings = get_config().VLLM_DEVELOPER_MODE
         phase = 'Prompt' if is_prompt else 'Decode'
         desc = f'{phase} warmup processing: '
+        phase_gc = gaudi_envs.VLLM_HPU_WARMUP_PHASE_GC
+        if phase_gc:
+            gc.collect()
         with tqdm(total=num_candidates, desc=desc, unit="item") as pbar:
             for idx, (batch_size, seq_len, num_blocks) in enumerate(reversed(buckets)):
                 if seq_len > self.max_num_tokens:
@@ -8157,7 +8184,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 if developer_settings:
                     self.log_warmup(phase, idx, num_candidates, batch_size, seq_len, num_blocks)
                 prompt_cfg, decode_cfg = None, None
-                with HabanaMemoryProfiler() as mem_prof:
+                with (kiro_v11.NoGcMemoryProfiler() if phase_gc else HabanaMemoryProfiler()) as mem_prof:
                     if is_prompt:
                         prompt_cfg = (batch_size, seq_len, num_blocks)
                     else:
@@ -8171,6 +8198,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 pbar.set_postfix_str(f"{idx}/{num_candidates}")
                 pbar.update(1)
 
+        if phase_gc:
+            gc.collect()
         return total_mem, total_batch_seq, captured_all
 
     def _warmup_tail_tokens(self):
@@ -9089,6 +9118,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         msg = (f"Warmup finished in {elapsed_time:.0f} secs, "
                f"allocated {format_bytes(end_mem - start_mem)} of device memory")
         logger.info(msg)
+        if getattr(self, '_compile_timers', None) is not None and self._compile_timers.installed:
+            self._compile_timers.report(elapsed_time)
         self.profiler.end()
 
         if not (self.num_mamba_like_layers or self.is_pooling_model) \
@@ -10179,6 +10210,19 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             return self.model.sample_dflash2_greedy(logits_device, spec.draft_token_ids, spec.target_logits_indices,
                                                     spec.bonus_logits_indices, spec.cu_num_draft_tokens)
         return self.rejection_sampler(spec, None, logits_device, sampling_metadata).sampled_token_ids
+
+    def _install_group_marks(self) -> None:
+        """VLLM_HPU_V11_GROUP_MARKS: step-timer marks after the entry region and each decoder group."""
+        from vllm_gaudi.models.qwen3_next import HpuQwen3NextModel
+
+        self._v11_marks_installed = True
+        object.__setattr__(self.model, '_hpu_entry_timer', self._step_timer)
+        for module in self.model.modules():
+            if isinstance(module, HpuQwen3NextModel) and getattr(module, '_hpu_compiled_layer_groups', None):
+                object.__setattr__(module, '_hpu_group_timer', self._step_timer)
+                logger.info('Group step-timer marks installed on %d decoder groups',
+                            len(module._hpu_compiled_layer_groups))
+                break
 
     def _warmup_dflash2_predraft(self, decode_data, hidden_states, aux_hidden_states, sampled_token_ids,
                                  num_decodes: int) -> None:

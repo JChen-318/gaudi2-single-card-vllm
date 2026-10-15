@@ -77,7 +77,7 @@ class RuntimeControl:
     def __init__(self, path: str):
         self.path = path
         self.active = {"lookahead": True, "fast_topk": True, "presample": True, "delta": True, "predraft": True,
-                       "guard_skip": True, "rng_pool": True}
+                       "guard_skip": True, "rng_pool": True, "early_readback": True}
 
     def refresh(self) -> dict:
         if self.path:
@@ -164,7 +164,7 @@ class DFlashLookahead:
     """
 
     def __init__(self, runner, presample: bool = True, profile_path: str = "", delta_verify: int | None = None,
-                 predraft_verify: int | None = None):
+                 predraft_verify: int | None = None, early_readback_verify: int | None = None):
         self.runner = runner
         self.presample = presample
         self.delta = DeltaPrepare(runner, delta_verify) if delta_verify is not None else None
@@ -175,10 +175,15 @@ class DFlashLookahead:
             self.predraft_verifier = PreDraftVerifier(predraft_verify)
         self.predraft_disabled = predraft_verify is None
         self.ready_predraft = None
+        # v11 early readback: copy the presampled tokens to the host before the pre-draft is queued.
+        self.early_readback_left = early_readback_verify
+        self.ready_sampled_cpu = None
+        self._sampled_buffers: dict = {}
+        self._sampled_flip = 0
         self.pending: dict | None = None
         self.disabled = False
         self.stats = {"launched": 0, "reused": 0, "subset": 0, "dropped": 0, "mismatch": 0, "predrafted": 0,
-                      "predraft_used": 0}
+                      "predraft_used": 0, "early_readback": 0}
         self._copy_stream = None
         self._drafts_cpu = None
         self._drafts_event = None
@@ -214,6 +219,41 @@ class DFlashLookahead:
             self._drafts_cpu = drafts.to("cpu", non_blocking=True)
             event.record()
         self._drafts_event = event
+
+    def _export_sampled(self, sampled: torch.Tensor):
+        """D2H of the presampled tokens queued right behind the sampling and before the
+        pre-draft, into pinned host memory, with an event; the next step's readback waits
+        for that event instead of for everything queued so far. Two buffers alternate."""
+        key = (tuple(sampled.shape), sampled.dtype)
+        buffers = self._sampled_buffers.get(key)
+        if buffers is None:
+            buffers = [torch.empty(sampled.shape, dtype=sampled.dtype, pin_memory=True) for _ in range(2)]
+            self._sampled_buffers[key] = buffers
+        self._sampled_flip ^= 1
+        host = buffers[self._sampled_flip]
+        host.copy_(sampled, non_blocking=True)
+        event = torch.hpu.Event()
+        event.record()
+        return host, event
+
+    def pop_sampled_cpu(self, device_sampled):
+        """Host copy of this step's reused sampled tokens, or None to read the device tensor."""
+        ready, self.ready_sampled_cpu = self.ready_sampled_cpu, None
+        if ready is None or self.early_readback_left is None:
+            return None
+        host, event = ready
+        event.synchronize()
+        self._mark("W")
+        if self.early_readback_left > 0:
+            self.early_readback_left -= 1
+            if not torch.equal(host, device_sampled.to("cpu")):
+                logger.error("DFlash2 early readback differs from the device tokens; early readback disabled")
+                self.early_readback_left = None
+                return None
+            if self.early_readback_left == 0:
+                logger.info("DFlash2 early readback verified")
+        self.stats["early_readback"] += 1
+        return host
 
     def _prepare(self, predicted, count: int):
         runner = self.runner
@@ -372,8 +412,15 @@ class DFlashLookahead:
                                                     fuse_greedy_sampling=False)
             self._mark("F")
             presampled = None
+            sampled_cpu = None
             if presample:
                 presampled = runner._dflash_lookahead_sample(decode_data, outputs[3], list(rows))
+                if self.early_readback_left is not None and control.get("early_readback", True):
+                    try:
+                        sampled_cpu = self._export_sampled(presampled)
+                    except Exception as exc:  # noqa: BLE001 - e.g. no pinned host allocator
+                        self.early_readback_left = None
+                        logger.error("DFlash2 early readback unavailable (%s: %s); disabled", type(exc).__name__, exc)
                 self._mark("Q")
             if plan is not None and presampled is not None:
                 try:
@@ -401,6 +448,7 @@ class DFlashLookahead:
             "sampled": presampled,
             "decode_data": decode_data,
             "predraft": predraft,
+            "sampled_cpu": sampled_cpu,
         }
         self.stats["launched"] += 1
 
@@ -443,6 +491,7 @@ class DFlashLookahead:
         """Return (forward outputs, presampled token ids or None) for this step's decodes, or None."""
         pending = self.pending
         self.ready_predraft = None
+        self.ready_sampled_cpu = None
         if pending is None:
             return None
         runner = self.runner
@@ -472,6 +521,7 @@ class DFlashLookahead:
         outputs = pending["outputs"]
         sampled = pending["sampled"]
         predraft = pending.get("predraft")
+        subset_before = self.stats["subset"]
         rows = [pending["rows"][req_id] for req_id in decode_ids]
         if rows != list(range(pending["padded"]))[:len(rows)] or padded_now != pending["padded"]:
             # The other request of the pair left: keep only the surviving rows.
@@ -490,6 +540,8 @@ class DFlashLookahead:
                 sampled = sampled.index_select(0, torch.tensor(rows, dtype=torch.long, device=device))
             self.stats["subset"] += 1
         self.stats["reused"] += 1
+        if self.stats["subset"] == subset_before:
+            self.ready_sampled_cpu = pending.get("sampled_cpu")
         # The pre-draft belongs to exactly these rows; only a pure decode step consumes it.
         self.ready_predraft = predraft if not prompt_req_ids and len(decode_ids) == num_decodes else None
         if self.stats["reused"] in (1, 100) or self.stats["reused"] % 1000 == 0:

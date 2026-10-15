@@ -63,6 +63,11 @@ def bridge_auto_enabled() -> bool:
     return False
 
 
+def mtp_fused_enabled() -> bool:
+    """Use the fused prepared core: state slot, Q/K norms, exp(decay) and BF16 inputs in-kernel."""
+    return os.environ.get("FLASHINFER_GAUDI_MTP_FUSED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def mtp_prepared_enabled() -> bool:
     """Opt into qualification of the graph-native B1/T8 MTP core."""
     return os.environ.get("FLASHINFER_GAUDI_ENABLE_MTP_PREPARED", "0").strip().lower() in ("1", "true", "yes", "on")

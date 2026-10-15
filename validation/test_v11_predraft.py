@@ -257,3 +257,45 @@ def test_forward_sampling_and_predraft_run_inside_the_guard_skip_round():
     key = skip.keys[0]
     assert key[2] == 4 and key[-1] is fast_topk.is_active()  # predraft pages and fast top-k state
     assert la.pending["predraft"] is not None
+
+
+# ---- early readback (VLLM_HPU_DFLASH2_EARLY_READBACK) -------------------------------------------
+def _launch_early(req_ids, computed, accepted, verify=2):
+    original_init = tl.kiro.DFlashLookahead.__init__
+
+    def init(self, runner, presample=True, *args, **kwargs):
+        original_init(self, runner, presample, early_readback_verify=verify)
+        self._export_sampled = lambda sampled: (sampled.clone(), SimpleNamespace(synchronize=lambda: None))
+
+    tl.kiro.DFlashLookahead.__init__ = init
+    try:
+        return tl._launch(req_ids, computed, accepted)
+    finally:
+        tl.kiro.DFlashLookahead.__init__ = original_init
+
+
+def test_early_readback_used_on_full_reuse_and_verified():
+    runner, la = _launch_early(["a", "b"], [100, 300], [3, 5])
+    assert la.pending["sampled_cpu"] is not None
+    tl._advance(runner, [3, 5], ["a", "b"])
+    _, sampled = la.take(tl._sched(la, ["a", "b"]), SimpleNamespace(token_ids=torch.zeros(2 * tl.T, 1)), 2, [])
+    host = la.pop_sampled_cpu(sampled)
+    assert torch.equal(host, sampled) and la.early_readback_left == 1 and la.stats["early_readback"] == 1
+    assert la.pop_sampled_cpu(sampled) is None  # consumed once
+
+
+def test_early_readback_skipped_on_subset_and_disabled_on_mismatch():
+    runner, la = _launch_early(["a", "b"], [100, 300], [3, 5])
+    tl._advance(runner, [3, 5], ["b"])
+    _, sampled = la.take(tl._sched(la, ["b"]), SimpleNamespace(token_ids=torch.zeros(tl.T, 1)), 1, [])
+    assert la.pop_sampled_cpu(sampled) is None  # rows were re-selected on the device
+    runner, la = _launch_early(["a"], [100], [4])
+    la.pending["sampled_cpu"] = (la.pending["sampled"] + 1, SimpleNamespace(synchronize=lambda: None))
+    tl._advance(runner, [4], ["a"])
+    _, sampled = la.take(tl._sched(la, ["a"]), SimpleNamespace(token_ids=torch.zeros(tl.T, 1)), 1, [])
+    assert la.pop_sampled_cpu(sampled) is None and la.early_readback_left is None
+
+
+def test_early_readback_off_by_default():
+    runner, la = _launch(["a"], [100], [4])
+    assert la.pending["sampled_cpu"] is None

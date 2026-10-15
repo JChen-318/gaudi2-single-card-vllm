@@ -11,8 +11,9 @@ import torch
 
 from flashinfer_gaudi._dispatch import BackendUnavailableError as BackendUnavailableError
 from flashinfer_gaudi._dispatch import require_reference_allowed
-from flashinfer_gaudi._config import get_backend_policy, mtp_prepared_enabled
+from flashinfer_gaudi._config import get_backend_policy, mtp_fused_enabled, mtp_prepared_enabled
 from flashinfer_gaudi._native import (
+    public_mtp_fused_op,
     public_mtp_gdn_op,
     public_mtp_prepared_op,
 )
@@ -430,6 +431,37 @@ def _gated_delta_rule_mtp_prepared(
     return output.to(packed_qkv.dtype), state_pool
 
 
+def _gated_delta_rule_mtp_fused(
+    packed_qkv: torch.Tensor,
+    log_decay: torch.Tensor,
+    beta: torch.Tensor,
+    state_pool: torch.Tensor,
+    state_indices: torch.Tensor,
+    num_accepted_tokens: torch.Tensor,
+    assume_distinct_checkpoints: bool = False,
+    checkpoint_start: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The prepared core with slot selection, Q/K L2 norms, Q scaling, exp(log decay)
+    and the BF16 casts done inside one kernel. Same outputs and checkpoint writes."""
+    native = public_mtp_fused_op()
+    if native is None:
+        raise BackendUnavailableError("The fused MTP kernel is not loaded; rebuild the native extension.")
+    batch, tokens, _ = packed_qkv.shape
+    if (checkpoint_start is not None and (not assume_distinct_checkpoints or checkpoint_start < 1
+                                          or checkpoint_start + batch * tokens > state_pool.shape[0])):
+        raise ValueError("Direct checkpoints require a valid, distinct, caller-proven contiguous destination.")
+    output, checkpoints = native(state_pool, packed_qkv, log_decay, beta, state_indices,
+                                 num_accepted_tokens.reshape(batch))
+    if checkpoint_start is not None:
+        state_pool.narrow(0, checkpoint_start, batch * tokens).copy_(checkpoints.reshape(-1, 48, 128, 128))
+    elif assume_distinct_checkpoints:
+        state_pool.index_copy_(0, state_indices.reshape(-1).long(), checkpoints.reshape(-1, 48, 128, 128))
+    else:
+        for token in range(tokens):
+            state_pool.index_copy_(0, state_indices[:, token].long(), checkpoints[:, token])
+    return output.to(packed_qkv.dtype), state_pool
+
+
 def gated_delta_rule_mtp_packed(
     packed_qkv: torch.Tensor,
     log_decay: torch.Tensor,
@@ -500,7 +532,9 @@ def gated_delta_rule_mtp_packed(
             logging.getLogger("vllm").info(
                 "PROBE-MTP [ENGAGED] prepared B1/T8 kernel  policy=%s batch=%d tokens=%d full_query=%s",
                 policy, batch, tokens, assume_full_query)
-        return _gated_delta_rule_mtp_prepared(
+        prepared_core = (_gated_delta_rule_mtp_fused if mtp_fused_enabled() and public_mtp_fused_op() is not None
+                         else _gated_delta_rule_mtp_prepared)
+        return prepared_core(
             packed_qkv,
             log_decay,
             beta,
