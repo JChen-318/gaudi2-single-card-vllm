@@ -37,7 +37,7 @@ from vllm_gaudi.extension.utils import align_and_pad, pad_list, with_default
 from vllm_gaudi.extension.debug import init_debug_logger
 from vllm_gaudi.v1.worker.hpu_dp_utils import set_hpu_dp_metadata
 from vllm_gaudi.v1.worker.gdn_state_layout import has_contiguous_dflash_checkpoints
-from vllm_gaudi.v1.worker import kiro_v6
+from vllm_gaudi.v1.worker import kiro_v6, kiro_v11
 from vllm_gaudi.v1.worker.attention_group_routing import decode_group_addresses, prefill_group_addresses
 from vllm_gaudi.v1.worker import decode_fast_paths
 from vllm_gaudi.v1.worker import decode_shared_prefix
@@ -1827,6 +1827,27 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
         context = self.model.combine_hidden_states(context)
         self.model.precompute_and_store_context_kv(context, context_positions, context_slots)
 
+    def predraft_prepare(self, sampled_token_ids, meta, block_table, aux_hidden_states, hidden_states, **options):
+        """Pre-draft bridge (VLLM_HPU_DFLASH2_PREDRAFT): draft inputs from the fixed-width
+        rejection output, context features and draft KV writes, in one region.
+
+        ``meta`` rows are base positions, active flags, first and last context pages.
+        Rejected and padded rows write to pad slots, exactly as the device prepare path.
+        """
+        from flashinfer_gaudi.dflash2 import prepare_device_inputs
+
+        prepared = prepare_device_inputs(sampled_token_ids, meta[0], block_table, meta[1].to(torch.bool), meta[2],
+                                         meta[3], **options)
+        num_context = sampled_token_ids.shape[0] * sampled_token_ids.shape[1]
+        if aux_hidden_states:
+            context = torch.cat([states.reshape(-1, states.shape[-1])[:num_context] for states in aux_hidden_states],
+                                dim=-1)
+        else:
+            context = hidden_states.reshape(-1, hidden_states.shape[-1])[:num_context]
+        context = self.model.combine_hidden_states(context)
+        self.model.precompute_and_store_context_kv(context, prepared[1], prepared[2])
+        return prepared[3:]
+
     def prepare_dflash2_inputs(self, *args, **kwargs):
         from flashinfer_gaudi.dflash2 import prepare_device_inputs
 
@@ -2140,10 +2161,15 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             from vllm_gaudi.v1.sample import fast_topk_topp
             fast_topk_topp.install()
         self._v6_control = kiro_v6.RuntimeControl(gaudi_envs.VLLM_HPU_V6_CONTROL)
+        self._guard_skip = (kiro_v11.GuardSkip(gaudi_envs.VLLM_HPU_GUARD_SKIP_WARM)
+                            if gaudi_envs.VLLM_HPU_GUARD_SKIP else None)
+        if gaudi_envs.VLLM_HPU_RNG_POOL > 0:
+            kiro_v11.RNG_POOL = kiro_v11.RngPool(gaudi_envs.VLLM_HPU_RNG_POOL)
         self._draft_profiler = None
         self._dflash_lookahead = (kiro_v6.DFlashLookahead(
             self, gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE, gaudi_envs.VLLM_HPU_V6_PROFILE_PREP,
-            gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA else None)
+            gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA else None,
+            gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT else None)
                                   if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD
                                   and self.speculative_config is not None and self.speculative_config.use_dflash()
                                   else None)
@@ -6557,6 +6583,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         num_prefills = len(pd_info.prompt_req_ids)
         num_reqs = num_decodes + num_prefills
         v6_active = self._v6_control.refresh() if batch_changed else self._v6_control.active
+        if kiro_v11.RNG_POOL is not None:
+            kiro_v11.RNG_POOL.active = v6_active["rng_pool"]
         if gaudi_envs.VLLM_HPU_FAST_TOPK_TOPP:
             from vllm_gaudi.v1.sample import fast_topk_topp
             batch = self.input_batch
@@ -6584,6 +6612,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         mtp_decode_outputs = None
         decode_sampled_requests = []
         device_prepared_dflash_drafts = None
+        predraft_warmup_sampled = None
         # Chunked prefill steps that do not finish a prompt produce no logits
         # and therefore do not run the sampler.  Keep this explicit so the
         # speculative proposer can distinguish "no sample this step" from a
@@ -6836,6 +6865,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                                     sampling_metadata,
                                 )
                             sampled_token_ids = sampler_output.sampled_token_ids
+                        if warmup_mode and is_dflash_spec and gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT:
+                            predraft_warmup_sampled = sampled_token_ids
                         if (is_dflash_spec and num_prefills == 0
                                 and self._can_use_dflash2_device_prepare(sampled_token_ids, num_decodes, decode_data)):
                             with self.profiler.record_event('internal', "dflash2_device_prepare"):
@@ -7048,20 +7079,35 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 # final prompt chunk produces logits and sampling metadata.
                 self._draft_token_ids = None
             else:
+                predraft = None
                 if self._dflash_lookahead is not None and self._v6_control.active["lookahead"]:
+                    # VLLM_HPU_DFLASH2_PREDRAFT: the reused round already queued this drafter.
+                    predraft = self._dflash_lookahead.pop_predraft() if not warmup_mode and num_prefills == 0 else None
                     # Prepare the predicted next round first: the device runs the drafter while
                     # the host then queues the next forward right behind it.
                     self._dflash_lookahead.stage(num_decodes, num_prefills, postprocessed_sampled_token_ids[:num_reqs],
                                                  warmup_mode, self.use_structured_output)
-                if self._draft_profiler is None:
-                    self._draft_profiler = kiro_v6.WindowProfiler(gaudi_envs.VLLM_HPU_V6_PROFILE_DRAFT)
-                self._draft_token_ids = self._draft_profiler.run(
-                    self.propose_draft_token_ids,
-                    scheduler_output, postprocessed_sampled_token_ids, sampling_metadata, non_flattened_hidden_states,
-                    sample_hidden_states, aux_hidden_states, prefill_sampled_token_ids_device,
-                    decode_sampled_token_ids_device, non_flattened_hidden_states_prefills,
-                    sample_hidden_states_prefills, aux_hidden_states_prefills, num_decodes,
-                    prefill_data if num_prefills > 0 else None, decode_data if num_decodes > 0 else None)
+                if predraft is not None and not self._dflash_lookahead.needs_predraft_check():
+                    self._draft_token_ids = predraft
+                else:
+                    if self._draft_profiler is None:
+                        self._draft_profiler = kiro_v6.WindowProfiler(gaudi_envs.VLLM_HPU_V6_PROFILE_DRAFT)
+                    self._draft_token_ids = self._draft_profiler.run(
+                        self.propose_draft_token_ids,
+                        scheduler_output, postprocessed_sampled_token_ids, sampling_metadata,
+                        non_flattened_hidden_states, sample_hidden_states, aux_hidden_states,
+                        prefill_sampled_token_ids_device, decode_sampled_token_ids_device,
+                        non_flattened_hidden_states_prefills, sample_hidden_states_prefills,
+                        aux_hidden_states_prefills, num_decodes, prefill_data if num_prefills > 0 else None,
+                        decode_data if num_decodes > 0 else None)
+                    if predraft is not None:
+                        # Verification window: both drafters wrote the same draft KV values.
+                        self._dflash_lookahead.check_predraft(predraft, self._draft_token_ids)
+                        if not self._dflash_lookahead.predraft_disabled:
+                            self._draft_token_ids = predraft
+                if predraft_warmup_sampled is not None and num_prefills == 0 and num_decodes:
+                    self._warmup_dflash2_predraft(decode_data, non_flattened_hidden_states, aux_hidden_states,
+                                                  predraft_warmup_sampled, num_decodes)
                 if self._step_timer is not None and not warmup_mode:
                     self._step_timer.mark("D")
                 if self._dflash_lookahead is not None and self._v6_control.active["lookahead"]:
@@ -7447,6 +7493,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             )
             if gaudi_envs.VLLM_HPU_DFLASH2_CONTEXT_REGION:
                 self._compile_named_methods(self.drafter.model, ['select_and_store_dflash2_context'])
+            if gaudi_envs.VLLM_HPU_DFLASH2_PREDRAFT:
+                self._compile_named_methods(self.drafter.model, ['predraft_prepare'])
 
     def _compile_named_methods(self, model, method_names):
         for method_name in method_names:
@@ -7602,13 +7650,19 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
     def _compile(self, module):
         if gaudi_envs.VLLM_HPU_UNIQUE_COMPILE_CODE:
             module = kiro_v6.with_private_code(module)
-        return torch.compile(module, **self.compile_config.get_compile_args())
+        compiled = torch.compile(module, **self.compile_config.get_compile_args())
+        if getattr(self, '_guard_skip', None) is not None:
+            compiled = kiro_v11.protect(compiled, self._guard_skip)
+        return compiled
 
     def _compile_spec_tensor_region(self, function):
         # These functions contain tensors only. Refuse graph breaks rather
         # than silently submitting their individual ops from Python.
         config = HPUCompileConfig(fullgraph=True, dynamic=False)
-        return torch.compile(function, **config.get_compile_args())
+        compiled = torch.compile(function, **config.get_compile_args())
+        if getattr(self, '_guard_skip', None) is not None:
+            compiled = kiro_v11.protect(compiled, self._guard_skip)
+        return compiled
 
     def _use_graphs(self, attn_metadata, batch_size):
         if self.model_config.enforce_eager:
@@ -10125,6 +10179,86 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             return self.model.sample_dflash2_greedy(logits_device, spec.draft_token_ids, spec.target_logits_indices,
                                                     spec.bonus_logits_indices, spec.cu_num_draft_tokens)
         return self.rejection_sampler(spec, None, logits_device, sampling_metadata).sampled_token_ids
+
+    def _warmup_dflash2_predraft(self, decode_data, hidden_states, aux_hidden_states, sampled_token_ids,
+                                 num_decodes: int) -> None:
+        """Compile the pre-draft regions for this decode bucket during warmup (best effort)."""
+        try:
+            width = self.drafter.num_query_per_req
+            starts = [int(self.input_batch.num_computed_tokens_cpu[row]) for row in range(num_decodes)]
+            plan = self._dflash2_predraft_plan(starts, decode_data.token_ids.shape[0] // width)
+            if plan is not None:
+                self._dflash2_predraft(decode_data, (hidden_states, aux_hidden_states), sampled_token_ids, starts, plan)
+        except Exception as exc:  # noqa: BLE001 - warmup must not fail on an optional path
+            logger.warning("Pre-draft warmup skipped for %d decodes: %s", num_decodes, exc)
+
+    def _dflash2_predraft_plan(self, starts, padded: int):
+        """Host inputs ``(meta, max_context_blocks)`` of a pre-draft for rows with these
+        predicted computed lengths, or None when the pre-draft does not apply."""
+        from vllm_gaudi.v1.spec_decode.dflash_cpu_inputs import bucket_context_blocks
+        from vllm_gaudi.v1.spec_decode.hpu_dflash2 import HpuDFlash2Proposer
+
+        drafter = self.drafter
+        if not isinstance(drafter, HpuDFlash2Proposer) or not starts or len(starts) > padded:
+            return None
+        defragmenter = getattr(self, 'defragmenter', None)
+        if defragmenter is not None and getattr(defragmenter, 'enabled', False):
+            return None
+        table = self.input_batch.block_table[drafter.kv_cache_gid]
+        blocks_per_row = getattr(table, 'num_blocks_per_row', None)
+        if blocks_per_row is None:
+            return None
+        width = drafter.num_query_per_req
+        block_size = drafter.block_size
+        for row, start in enumerate(starts):
+            # Context writes reach the last verified position of the predicted round.
+            if int(blocks_per_row[row]) < (start + width - 1) // block_size + 1:
+                return None
+        window = int(drafter.sliding_window) if drafter.sliding_window is not None else None
+        return kiro_v11.predraft_meta(starts, padded, width, block_size, window, int(table.get_cpu_tensor().shape[1]),
+                                      bucket_context_blocks if gaudi_envs.VLLM_HPU_DFLASH2_PAGE_BUCKETS else None)
+
+    def _dflash2_predraft(self, decode_data, outputs, sampled_token_ids, starts, plan):
+        """Queue the next drafter from a predicted round's device outputs (VLLM_HPU_DFLASH2_PREDRAFT).
+
+        ``sampled_token_ids`` is that round's fixed-width rejection output,
+        ``starts`` the predicted computed length of each real row and ``plan``
+        the result of ``_dflash2_predraft_plan``. Nothing here reads the
+        accepted lengths back, so the drafter runs on the device right after
+        the sampling instead of after the host has parsed it. Returns the
+        drafts ``[len(starts), K]`` on the device, or None when not applicable.
+        """
+        drafter = self.drafter
+        width = drafter.num_query_per_req
+        if plan is None or decode_data.token_ids is None or decode_data.token_ids.shape[0] % width:
+            return None
+        padded = decode_data.token_ids.shape[0] // width
+        if (len(starts) > padded or not isinstance(sampled_token_ids, torch.Tensor)
+                or tuple(sampled_token_ids.shape) != (padded, width) or plan[0].shape[1] != padded):
+            return None
+        meta, max_context_blocks = plan
+        block_size = drafter.block_size
+        window = int(drafter.sliding_window) if drafter.sliding_window is not None else None
+        block_table = self._dflash2_commit_block_table_if_changed(drafter.kv_cache_gid, padded)
+        hidden_states, aux_hidden_states = outputs[0], outputs[1]
+        prepared = drafter._model_api().predraft_prepare(
+            sampled_token_ids,
+            async_h2d_copy(meta, device=self.device),
+            block_table,
+            aux_hidden_states,
+            hidden_states,
+            block_size=block_size,
+            num_query_per_req=width,
+            mask_token_id=drafter.mask_token_id,
+            pad_block_id=int(self._PAD_BLOCK_ID),
+            pad_slot_id=int(self._PAD_SLOT_ID),
+            max_model_len=int(self.max_model_len),
+            max_context_blocks=max_context_blocks,
+            window=window,
+            causal=drafter.dflash_causal,
+            bias_dtype=drafter.dtype,
+        )
+        return drafter.propose_prepared_query_block((None, None, None, *prepared), self, len(starts))
 
     def _can_use_dflash2_device_prepare(
         self,

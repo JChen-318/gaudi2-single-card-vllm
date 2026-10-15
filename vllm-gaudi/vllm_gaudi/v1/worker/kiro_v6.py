@@ -5,6 +5,7 @@ default-off switch in ``vllm_gaudi.envs``."""
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import time
 import types
@@ -75,7 +76,8 @@ class RuntimeControl:
 
     def __init__(self, path: str):
         self.path = path
-        self.active = {"lookahead": True, "fast_topk": True, "presample": True, "delta": True}
+        self.active = {"lookahead": True, "fast_topk": True, "presample": True, "delta": True, "predraft": True,
+                       "guard_skip": True, "rng_pool": True}
 
     def refresh(self) -> dict:
         if self.path:
@@ -161,13 +163,22 @@ class DFlashLookahead:
     step may interleave differently).
     """
 
-    def __init__(self, runner, presample: bool = True, profile_path: str = "", delta_verify: int | None = None):
+    def __init__(self, runner, presample: bool = True, profile_path: str = "", delta_verify: int | None = None,
+                 predraft_verify: int | None = None):
         self.runner = runner
         self.presample = presample
         self.delta = DeltaPrepare(runner, delta_verify) if delta_verify is not None else None
+        # v11 pre-draft: queue the drafter of the predicted round right behind its sampling.
+        self.predraft_verifier = None
+        if predraft_verify is not None:
+            from vllm_gaudi.v1.worker.kiro_v11 import PreDraftVerifier
+            self.predraft_verifier = PreDraftVerifier(predraft_verify)
+        self.predraft_disabled = predraft_verify is None
+        self.ready_predraft = None
         self.pending: dict | None = None
         self.disabled = False
-        self.stats = {"launched": 0, "reused": 0, "subset": 0, "dropped": 0, "mismatch": 0}
+        self.stats = {"launched": 0, "reused": 0, "subset": 0, "dropped": 0, "mismatch": 0, "predrafted": 0,
+                      "predraft_used": 0}
         self._copy_stream = None
         self._drafts_cpu = None
         self._drafts_event = None
@@ -335,21 +346,47 @@ class DFlashLookahead:
         padded = decode_data.token_ids.shape[0] // width
         # Each row's first position holds its last sampled token; the drafts follow.
         decode_data.token_ids.view(padded, width)[:num_decodes, 1:].copy_(drafts.to(decode_data.token_ids.dtype))
-        outputs = runner._execute_model_generic(decode_data.token_ids,
-                                                decode_data.position_ids,
-                                                decode_data.attn_metadata,
-                                                decode_data.logits_indices,
-                                                runner.kv_caches,
-                                                None,
-                                                None,
-                                                warmup_mode=False,
-                                                fuse_greedy_sampling=False)
-        self._mark("F")
-        presampled = None
-        if (self.presample and runner._v6_control.active.get("presample", True)
-                and decode_data.spec_decode_metadata is not None):
-            presampled = runner._dflash_lookahead_sample(decode_data, outputs[3], list(rows))
-            self._mark("Q")
+        control = runner._v6_control.active
+        presample = (self.presample and control.get("presample", True) and decode_data.spec_decode_metadata is not None)
+        starts = [computed[req_id] for req_id in rows]
+        plan = (runner._dflash2_predraft_plan(starts, padded)
+                if presample and not self.predraft_disabled and control.get("predraft", True) else None)
+        guard_skip = getattr(runner, "_guard_skip", None) if control.get("guard_skip", True) else None
+        key = None
+        if guard_skip is not None:
+            from vllm_gaudi.v1.worker.kiro_v11 import shape_key
+            batch = runner.input_batch
+            from vllm_gaudi.v1.sample import fast_topk_topp
+            key = (shape_key(decode_data), tuple(sorted(control.items())), None if plan is None else plan[1],
+                   batch.all_greedy, batch.all_random, batch.no_top_k, batch.no_top_p, fast_topk_topp.is_active())
+        predraft = None
+        with guard_skip.round(key) if guard_skip is not None else contextlib.nullcontext():
+            outputs = runner._execute_model_generic(decode_data.token_ids,
+                                                    decode_data.position_ids,
+                                                    decode_data.attn_metadata,
+                                                    decode_data.logits_indices,
+                                                    runner.kv_caches,
+                                                    None,
+                                                    None,
+                                                    warmup_mode=False,
+                                                    fuse_greedy_sampling=False)
+            self._mark("F")
+            presampled = None
+            if presample:
+                presampled = runner._dflash_lookahead_sample(decode_data, outputs[3], list(rows))
+                self._mark("Q")
+            if plan is not None and presampled is not None:
+                try:
+                    predraft = runner._dflash2_predraft(decode_data, outputs, presampled, starts, plan)
+                except Exception as exc:  # noqa: BLE001 - drafts only steer acceptance; keep serving
+                    # Nothing but draft KV may have been written; the host drafter rewrites it.
+                    self.predraft_disabled = True
+                    logger.error("DFlash2 pre-draft failed (%s: %s); pre-draft is now disabled",
+                                 type(exc).__name__, exc)
+                    predraft = None
+                if predraft is not None:
+                    self.stats["predrafted"] += 1
+                    self._mark("G")
         self.pending = {
             "req_ids": list(rows),
             "rows": rows,
@@ -363,6 +400,7 @@ class DFlashLookahead:
             "outputs": outputs,
             "sampled": presampled,
             "decode_data": decode_data,
+            "predraft": predraft,
         }
         self.stats["launched"] += 1
 
@@ -404,6 +442,7 @@ class DFlashLookahead:
     def take(self, scheduler_output, decode_data, num_decodes: int, prompt_req_ids):
         """Return (forward outputs, presampled token ids or None) for this step's decodes, or None."""
         pending = self.pending
+        self.ready_predraft = None
         if pending is None:
             return None
         runner = self.runner
@@ -432,11 +471,15 @@ class DFlashLookahead:
             return None
         outputs = pending["outputs"]
         sampled = pending["sampled"]
+        predraft = pending.get("predraft")
         rows = [pending["rows"][req_id] for req_id in decode_ids]
         if rows != list(range(pending["padded"]))[:len(rows)] or padded_now != pending["padded"]:
             # The other request of the pair left: keep only the surviving rows.
+            real_rows = list(rows)
             rows = rows + [rows[0]] * (padded_now - len(rows))
             device = outputs[3].device
+            if predraft is not None:
+                predraft = predraft.index_select(0, torch.tensor(real_rows, dtype=torch.long, device=device))
             token_rows = torch.tensor([row * width + offset for row in rows for offset in range(width)],
                                       dtype=torch.long, device=device)
             hidden, aux, sample_hidden, logits, fused = outputs
@@ -447,9 +490,26 @@ class DFlashLookahead:
                 sampled = sampled.index_select(0, torch.tensor(rows, dtype=torch.long, device=device))
             self.stats["subset"] += 1
         self.stats["reused"] += 1
+        # The pre-draft belongs to exactly these rows; only a pure decode step consumes it.
+        self.ready_predraft = predraft if not prompt_req_ids and len(decode_ids) == num_decodes else None
         if self.stats["reused"] in (1, 100) or self.stats["reused"] % 1000 == 0:
             logger.info("DFlash2 lookahead stats: %s", self.stats)
         return outputs, sampled
+
+    def pop_predraft(self):
+        """The pre-drafted next drafts for this step's decodes, if the reused round brought them."""
+        predraft, self.ready_predraft = self.ready_predraft, None
+        if predraft is None or self.predraft_disabled:
+            return None
+        self.stats["predraft_used"] += 1
+        return predraft
+
+    def needs_predraft_check(self) -> bool:
+        return self.predraft_verifier is not None and self.predraft_verifier.left > 0
+
+    def check_predraft(self, predraft, host) -> None:
+        if not self.predraft_verifier.compare(predraft, host):
+            self.predraft_disabled = True
 
 
 class DeltaPrepare:

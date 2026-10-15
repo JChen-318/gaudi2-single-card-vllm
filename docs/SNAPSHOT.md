@@ -15,3 +15,7 @@
 `vllm-gaudi/vllm_gaudi/` 下 11 个文件按服务器现用版本更新（6 个修改、5 个新增，均与服务器 `/opt` 中的字节逐一核对过 SHA-256），对应 [优化说明](OPTIMIZATION.md) 第 9 节的 v6–v10 改动和此前的草稿输入打包。清单中这些文件的哈希与 `captured_at_utc` 已同步更新。
 
 `native/tpc-kernel-shim/` 是新增源码，不在快照清单中：部署版本的默认库列表写的是本机路径，仓库版本改为从 `KIRO_TPC_LIBS` 读取（未设置时只加载官方库），其余逻辑相同。
+
+## 2026-10-15 更新（v11）
+
+`vllm-gaudi/vllm_gaudi/` 下 5 个文件按服务器现用 v11 版本更新（4 个修改、新增 `v1/worker/kiro_v11.py`），均与服务器 `/opt` 中的字节核对过 SHA-256，对应 [优化说明](OPTIMIZATION.md) 第 11 节。清单中的哈希与 `captured_at_utc` 已同步。

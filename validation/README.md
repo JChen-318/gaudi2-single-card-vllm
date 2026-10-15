@@ -5,7 +5,7 @@
 被测代码按 AST 从本仓库的源码文件里抽出来执行（`vllm-gaudi/vllm_gaudi/extension/ops.py`、`.../v1/worker/hpu_model_runner.py` 等），不是另写的副本，所以测的就是发布的那份文本。
 
 ```bash
-python -m pytest -q validation        # 在仓库根目录执行，约 3 分钟，2588 项
+python -m pytest -q validation        # 在仓库根目录执行，约 3 分钟，2609 项
 ```
 
 | 文件 | 覆盖内容 |
@@ -18,6 +18,9 @@ python -m pytest -q validation        # 在仓库根目录执行，约 3 分钟�
 | `test_lookahead.py` | 下一轮预提交：完全复用、一路结束后只取另一路的行、请求结束丢弃、预测不符时关闭、接近 max_tokens 不启用、先准备后提交（假 runner） |
 | `test_delta_prepare.py` | 增量准备与完整准备逐字段一致（120 轮、单/两路、跨页、M-RoPE），页表变化时退回完整准备，比对失败时关闭 |
 | `test_draft_page_buckets.py` | 草稿上下文页数分桶：原有页上的输入逐元素相同，补出的页是 pad 块且偏置全为 −inf |
+| `test_v11_predraft.py` | 草稿提前：主机侧输入；设备桥接与主机草稿路径在所有接受长度、有无滑窗、单/两路下看到的上下文 slot、查询 slot、输入和 KV 写入位置一致（需要 FlashInfer-Gaudi 的 `dflash2.py`，用 `FLASHINFER_DFLASH2_PY` 指定，否则跳过）；随提前提交保存、一路结束时取对应行、有 prefill 时不用、校验失败时关闭 |
+| `test_v11_guard_skip.py` | 守卫跳过：预热/跳过/复查节奏、产生新图时重新计数、未见过的输入在跳过状态下用完整守卫重试且结果正确、嵌套编译区域不断图、轮次键只看形状和标志（CPU `aot_eager`） |
+| `test_v11_rng_pool.py` | 采样随机数池：每轮取到独立的拷贝、按轮数补充、分布检查、有独立生成器的请求不走池、拒绝采样器的接入 |
 
 `dynamo/` 下是两个断图的复现与检查脚本，需要与服务器同主版本的 torch（这里用的是 2.11）：
 

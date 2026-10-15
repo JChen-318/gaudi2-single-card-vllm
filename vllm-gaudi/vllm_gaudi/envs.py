@@ -1910,6 +1910,16 @@ environment_variables["VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY"] = lambda: int(o
     "VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY", "64"))
 # JSON {"lookahead": bool, "fast_topk": bool}; re-read whenever the batch changes.
 environment_variables["VLLM_HPU_V6_CONTROL"] = lambda: os.environ.get("VLLM_HPU_V6_CONTROL", "")
+# v11 (Kiro): each switch is independent and off by default.
+environment_variables["VLLM_HPU_DFLASH2_PREDRAFT"] = lambda: os.environ.get(
+    "VLLM_HPU_DFLASH2_PREDRAFT", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_DFLASH2_PREDRAFT_VERIFY"] = lambda: int(os.environ.get(
+    "VLLM_HPU_DFLASH2_PREDRAFT_VERIFY", "32"))
+environment_variables["VLLM_HPU_GUARD_SKIP"] = lambda: os.environ.get(
+    "VLLM_HPU_GUARD_SKIP", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_GUARD_SKIP_WARM"] = lambda: int(os.environ.get(
+    "VLLM_HPU_GUARD_SKIP_WARM", "3"))
+environment_variables["VLLM_HPU_RNG_POOL"] = lambda: int(os.environ.get("VLLM_HPU_RNG_POOL", "0"))
 
 environment_variables['VLLM_HPU_MTP_METADATA_POOL'] = lambda: os.environ.get(
     'VLLM_HPU_MTP_METADATA_POOL', '0') == '1'

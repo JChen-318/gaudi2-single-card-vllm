@@ -255,6 +255,10 @@ def _generate_rectangular_uniform_probs(
     device: torch.device,
 ) -> torch.Tensor:
     """Generate acceptance uniforms while preserving per-request RNG state."""
+    from vllm_gaudi.v1.worker.kiro_v11 import pooled_draw
+    pooled = pooled_draw("uniform", (batch_size, width), torch.float32, device, generators)
+    if pooled is not None:  # VLLM_HPU_RNG_POOL
+        return pooled
     uniform_probs = torch.rand((batch_size, width), dtype=torch.float32, device=device)
     for req_idx, generator in generators.items():
         if num_draft_tokens[req_idx] > 0:
@@ -273,6 +277,10 @@ def _generate_request_exponential_noise(
 ) -> torch.Tensor:
     """Generate the exponential-race noise used for recovered-token sampling."""
     dtype = torch.float64 if use_fp64_gumbel else torch.float32
+    from vllm_gaudi.v1.worker.kiro_v11 import pooled_draw
+    pooled = pooled_draw("exponential", (batch_size, vocab_size), dtype, device, generators)
+    if pooled is not None:  # VLLM_HPU_RNG_POOL
+        return pooled
     noise = torch.empty((batch_size, vocab_size), dtype=dtype, device=device)
     noise.exponential_()
     for req_idx, generator in generators.items():
