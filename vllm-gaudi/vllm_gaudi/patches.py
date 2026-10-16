@@ -941,6 +941,8 @@ def apply() -> None:
         _patch_free_blocks()
         _patch_sdpa_attention_forward()
         _patch_inc_quantization_config()
+        from vllm_gaudi.v1.core import prefix_state_cache
+        prefix_state_cache.install()
 
     _plugins_mod.load_general_plugins = _load_general_with_hpu_patches
 

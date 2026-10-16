@@ -190,6 +190,9 @@ class HPUBucketingManager():
                                                    self.max_num_batched_tokens, self.block_size, self.num_hpu_blocks,
                                                    buckets_from_file, self.mamba_chunk_size,
                                                    self.mamba_chunk_size_is_explicit)
+            if buckets_from_file is None:
+                self.prompt_buckets = add_fine_ctx_buckets(self.prompt_buckets)
+            index_prompt_ctx(self.prompt_buckets, self.block_size)
             self.log_generate_info(True)
             if self.use_sliding_window:
                 self.prompt_buckets = [
@@ -560,6 +563,40 @@ def generate_buckets(bs_range,
         logger().debug(msg)
 
     return sorted(buckets)
+
+
+# Context buckets (blocks) of each prompt query size, frozen when the prompt buckets are generated. Read while tracing
+# by the split prefill attention (extension/ops.py), so it must not change afterwards.
+PROMPT_CTX_BY_QUERY: dict = {}
+PROMPT_CTX_BLOCK_SIZE = 0
+
+
+def index_prompt_ctx(buckets, block_size):
+    global PROMPT_CTX_BY_QUERY, PROMPT_CTX_BLOCK_SIZE
+    PROMPT_CTX_BLOCK_SIZE = block_size
+    by_query: dict = {}
+    for _, query, ctx in buckets:
+        by_query.setdefault(query, set()).add(ctx)
+    PROMPT_CTX_BY_QUERY = {query: tuple(sorted(c)) for query, c in by_query.items()}
+    return PROMPT_CTX_BY_QUERY
+
+
+def add_fine_ctx_buckets(buckets):
+    """VLLM_HPU_PROMPT_FINE_CTX_STEP: context buckets every STEP blocks from VLLM_HPU_PROMPT_FINE_CTX_MIN up to
+    the largest context bucket, for the largest query only. Long prompts run as chunks of that query, and with
+    exponential context buckets a chunk at 130K tokens of context would otherwise be padded to 262K."""
+    step = int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_STEP", "0"))
+    if step <= 0 or not buckets:
+        return buckets
+    lo = int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_MIN", "256"))
+    max_query = max(b[1] for b in buckets)
+    largest = [b for b in buckets if b[1] == max_query]
+    bs = min(b[0] for b in largest)
+    max_ctx = max(b[2] for b in largest)
+    merged = sorted(set(buckets) | {(bs, max_query, ctx) for ctx in range(lo, max_ctx, step)})
+    logger().info(f"Fine context buckets for query {max_query}: {len(merged) - len(buckets)} added "
+                  f"(every {step} blocks from {lo} to {max_ctx})")
+    return merged
 
 
 def is_greater_or_equal(tuple1, tuple2):

@@ -1936,6 +1936,24 @@ environment_variables["VLLM_HPU_SHARED_PREFIX_ATTN"] = lambda: os.environ.get(
     "VLLM_HPU_SHARED_PREFIX_ATTN", "block").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_QK"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_QK", "fp8").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_AV"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_AV", "fp8").strip().lower()
+# Prefix caching for hybrid GDN models with compact recurrent state (v1/core/prefix_state_cache.py): attention KV
+# through vLLM's prefix caching, GDN states as device snapshots at chosen block boundaries. Needs
+# --enable-prefix-caching. SLOTS snapshots are kept (LRU); INTERVAL is the snapshot spacing in tokens besides the
+# last block boundary before each prompt end; BLOCK is the scheduler block (hit granularity) in tokens.
+environment_variables["VLLM_HPU_PREFIX_STATE_CACHE"] = lambda: os.environ.get(
+    "VLLM_HPU_PREFIX_STATE_CACHE", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_PREFIX_STATE_SLOTS"] = lambda: int(os.environ.get("VLLM_HPU_PREFIX_STATE_SLOTS", "16"))
+environment_variables["VLLM_HPU_PREFIX_STATE_INTERVAL"] = lambda: int(
+    os.environ.get("VLLM_HPU_PREFIX_STATE_INTERVAL", "16384"))
+environment_variables["VLLM_HPU_PREFIX_STATE_BLOCK"] = lambda: int(os.environ.get("VLLM_HPU_PREFIX_STATE_BLOCK", "2048"))
+# Extra prompt buckets for the largest query size: context blocks from MIN up to the largest context bucket in
+# steps of STEP (0 = off). Long prompts run as chunks of the largest query, so this bounds their context padding.
+environment_variables["VLLM_HPU_PROMPT_FINE_CTX_STEP"] = lambda: int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_STEP", "0"))
+environment_variables["VLLM_HPU_PROMPT_FINE_CTX_MIN"] = lambda: int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_MIN", "256"))
+# Chunks of the largest prompt query against a context on the fine bucket grid attend to it as 8K-key slices stacked
+# into one batched FusedSDPA call (extension/prefill_split_attn.py; read in extension/ops.py).
+environment_variables["VLLM_HPU_PREFILL_SPLIT_ATTN"] = lambda: os.environ.get(
+    "VLLM_HPU_PREFILL_SPLIT_ATTN", "0").lower() in ("1", "true")
 # Engine thread on its own physical core after warmup (cpu id; -1 = off).
 environment_variables["VLLM_HPU_PIN_MAIN_CPU"] = lambda: int(os.environ.get("VLLM_HPU_PIN_MAIN_CPU", "-1"))
 # Diagnostics: step-timer marks after the model entry region and every decoder group.

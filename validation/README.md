@@ -5,7 +5,7 @@
 被测代码按 AST 从本仓库的源码文件里抽出来执行（`vllm-gaudi/vllm_gaudi/extension/ops.py`、`.../v1/worker/hpu_model_runner.py` 等），不是另写的副本，所以测的就是发布的那份文本。
 
 ```bash
-python -m pytest -q validation        # 在仓库根目录执行，约 3.5 分钟，2651 项
+python -m pytest -q validation        # 在仓库根目录执行，约 3 分钟
 ```
 
 | 文件 | 覆盖内容 |
@@ -26,6 +26,17 @@ python -m pytest -q validation        # 在仓库根目录执行，约 3.5 分�
 | `test_v13_fused_gather.py` | 融合 GDN 核心先取初始状态（`FLASHINFER_GAUDI_MTP_FUSED_GATHER`）：用与 kernel 约定相同的 Python 替身，两条路线的输出与状态池逐位相同（单/两路、接受数含 0 与超过 8、直接写检查点与 index_copy 两种写法）；kernel 只拿到选中的行，槽位指向本行；默认开启 |
 | `test_dense_decode_attn.py` | 整段计算的共享前缀注意力（`VLLM_HPU_SHARED_PREFIX_ATTN=dense`）：用生产的页表、归属与可见性生成方式，FP8/BF16 缓存、4 种矩阵乘精度组合与 float64 因果注意力参考一致；补齐的请求行输出为 0 且无 NaN；改动另一个请求的页不影响本请求 |
 | `test_v13_warmup_gc.py` | 预热按阶段 gc（`VLLM_HPU_WARMUP_PHASE_GC`）：每个分桶只读显存增量、不调用 `gc.collect()`，出错时也能退出；runner 中开关与阶段前后各一次 gc 的接入，默认关闭 |
+
+`core/` 下的测试用到 vLLM 本体（本仓库的 `vllm-core/` 或已安装的 vLLM）和它的依赖，需要在装好服务的环境里跑；不加载平台插件、不碰设备：
+
+```bash
+VLLM_PLUGINS=none TORCH_DEVICE_BACKEND_AUTOLOAD=0 PYTHONPATH=vllm-gaudi .venv/bin/python -m pytest -q validation/core
+```
+
+| 文件 | 覆盖内容 |
+|---|---|
+| `core/test_prefix_state_cache.py` | 前缀缓存（`VLLM_HPU_PREFIX_STATE_CACHE`）：在 vLLM 真实的 KV 缓存管理器上（目标、草稿两个注意力组 + 两个 GDN 组，align 模式，每请求 7 个投机块），多轮续写命中上一轮提示词末尾的快照，中途分叉时退到更早的快照，快照被挤掉后不命中，无快照时即使注意力 KV 还在也不命中；投机 decode 之后下一轮仍能命中；DFlash 的 EAGLE 标记被清除；被抢占的请求恢复时也恢复状态；同一步里恢复和保存不会用到同一个槽位；分段在快照位置停下；runner 侧只复制每组的基础状态行 |
+| `core/test_prefill_buckets_slicing.py` | 细分上下文分桶（`VLLM_HPU_PROMPT_FINE_CTX_STEP`）只加给最大的 query、查找取到最近的桶、冻结的每 query 上下文索引；分片 prefill 注意力（`VLLM_HPU_PREFILL_SPLIT_ATTN`）用 CPU 替身 kernel 与稠密 softmax 注意力一致（GQA、补齐页填大值、归一化常数因子可抵消），以及适用条件 |
 
 `dynamo/` 下是两个断图的复现与检查脚本，需要与服务器同主版本的 torch（这里用的是 2.11）：
 

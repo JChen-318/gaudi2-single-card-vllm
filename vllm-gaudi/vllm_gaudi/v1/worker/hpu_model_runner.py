@@ -38,6 +38,7 @@ from vllm_gaudi.extension.utils import align_and_pad, pad_list, with_default
 from vllm_gaudi.extension.debug import init_debug_logger
 from vllm_gaudi.v1.worker.hpu_dp_utils import set_hpu_dp_metadata
 from vllm_gaudi.v1.worker.gdn_state_layout import has_contiguous_dflash_checkpoints
+from vllm_gaudi.v1.core import prefix_state_cache
 from vllm_gaudi.v1.worker import kiro_v6, kiro_v11
 from vllm_gaudi.v1.worker.attention_group_routing import decode_group_addresses, prefill_group_addresses
 from vllm_gaudi.v1.worker import decode_fast_paths
@@ -2485,7 +2486,14 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         self.max_cudagraph_capture_size = self.vllm_config.compilation_config.max_cudagraph_capture_size
         if self.max_cudagraph_capture_size is None:
             self.max_cudagraph_capture_size = self.max_num_batched_tokens
-        self.use_prefix_caching = (self.vllm_config.cache_config.enable_prefix_caching)
+        # vLLM's per-block Mamba state caching; GDN snapshots (prefix_state_cache) keep the compact layout.
+        self.use_prefix_caching = prefix_state_cache.block_state_caching(self.vllm_config.cache_config)
+        self._gdn_snapshots = (prefix_state_cache.GdnSnapshotStore(gaudi_envs.VLLM_HPU_PREFIX_STATE_SLOTS)
+                               if prefix_state_cache.enabled() and self.vllm_config.cache_config.enable_prefix_caching
+                               else None)
+        if self._gdn_snapshots is not None:
+            # The scheduler is built after the executor in the same process (uniproc executor).
+            prefix_state_cache.install()
         self.bucketing_manager = HPUBucketingManager()
         max_num_prefill_seqs = self.max_num_seqs if self.use_merged_prefill \
                                else self.max_prefill_batch_size
@@ -3274,6 +3282,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                     self._gdn_req_to_base_slot[req_id] = base_slot
                     logger.debug("GDN_COMPACT alloc req=%s base_slot=%d free_list_len=%d", req_id, base_slot,
                                  len(self._gdn_slot_free_list))
+
+        if self._gdn_snapshots is not None:
+            self._gdn_snapshots.apply(self, scheduler_output)
 
         # Condense the batched states if there are empty indices.
         if removed_req_indices:

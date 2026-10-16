@@ -599,6 +599,25 @@ def _fsdpa_num_q_tiles(attn_bias: Optional[torch.Tensor]) -> int:
     return num_tiles
 
 
+# VLLM_HPU_PREFILL_SPLIT_ATTN: chunks of the largest prompt query against a context on the fine bucket grid run
+# as batched 8K-key slices (extension/prefill_split_attn.py).
+_PREFILL_SPLIT_ATTN = os.environ.get("VLLM_HPU_PREFILL_SPLIT_ATTN", "0").lower() in ("1", "true")
+
+
+def _prefill_split_eligible(query, key, attn_bias, is_causal) -> bool:
+    from vllm_gaudi.extension import prefill_split_attn
+    from vllm_gaudi.extension.bucketing import common as bucketing
+    if not bucketing.PROMPT_CTX_BY_QUERY or not bucketing.PROMPT_CTX_BLOCK_SIZE:
+        return False
+    max_query = max(bucketing.PROMPT_CTX_BY_QUERY)
+    min_prefix = int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_MIN", "256")) * bucketing.PROMPT_CTX_BLOCK_SIZE
+    fine_step = int(os.environ.get("VLLM_HPU_PROMPT_FINE_CTX_STEP", "0")) * bucketing.PROMPT_CTX_BLOCK_SIZE
+    # bucket padding must stay inside the last slice: fine buckets at most one slice apart
+    if fine_step <= 0 or fine_step > prefill_split_attn.SLICE:
+        return False
+    return prefill_split_attn.eligible(query, key, attn_bias, is_causal, max_query, min_prefix)
+
+
 def _fsdpa_prompt_attention(query: torch.Tensor,
                             key: torch.Tensor,
                             value: torch.Tensor,
@@ -618,6 +637,10 @@ def _fsdpa_prompt_attention(query: torch.Tensor,
         softmax_mode = 'fp32'
     else:
         softmax_mode = 'fast'
+    if (_PREFILL_SPLIT_ATTN and sinks is None and window_size is None and type(fsdpa_op).__name__ == 'ModuleFusedSDPA'
+            and _prefill_split_eligible(query, key, attn_bias, is_causal)):
+        from vllm_gaudi.extension import prefill_split_attn
+        return prefill_split_attn.split_attention(query, key, value, attn_bias, scale, softmax_mode).transpose(1, 2)
     recompute_mode = True
     assert attn_bias is not None or valid_seq_lengths is not None, \
         'Either attn_bias or valid_seq_lengths must be != None'

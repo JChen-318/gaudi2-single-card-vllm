@@ -40,3 +40,7 @@
 ## 2026-10-15 更新（v15）
 
 新增 `vllm-gaudi/vllm_gaudi/extension/dense_decode_attn.py`，修改 `envs.py`、`extension/ops.py`、`attention/ops/hpu_paged_attn.py` 和 `scripts/serve.sh`（整段计算的共享前缀注意力，[优化说明](OPTIMIZATION.md) 第 17 节）。均与生产服务所用安装（本仓库的一份副本）逐字节核对过，清单已同步。
+
+## 2026-10-16 更新（v16）
+
+新增 `vllm-gaudi/vllm_gaudi/v1/core/prefix_state_cache.py`（前缀缓存的 GDN 状态快照）和 `extension/prefill_split_attn.py`（叠片 prefill 注意力），修改 `envs.py`、`extension/ops.py`、`extension/bucketing/common.py`、`models/qwen3_5.py`、`patches.py`、`platform.py`、`v1/worker/hpu_model_runner.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 18 节）。`extension/utils.py` 在开发中改过、最终未使用，已恢复原样。均与生产服务所用安装逐字节核对过，清单已同步。

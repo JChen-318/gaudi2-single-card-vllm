@@ -27,7 +27,7 @@ done
 : "${TARGET_MODEL:?set TARGET_MODEL in $CONFIG}" "${DRAFT_MODEL:?set DRAFT_MODEL in $CONFIG}"
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-qwen3.8-27b-fp8-mtp}
 HOST=${HOST:-127.0.0.1}; PORT=${PORT:-8000}
-MAX_MODEL_LEN=${MAX_MODEL_LEN:-262144}; MAX_NUM_SEQS=${MAX_NUM_SEQS:-2}; KV_CACHE_GIB=${KV_CACHE_GIB:-28}
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-262144}; MAX_NUM_SEQS=${MAX_NUM_SEQS:-2}; KV_CACHE_GIB=${KV_CACHE_GIB:-29}
 DATA_DIR=${DATA_DIR:-$HOME/.cache/gaudi2-single-card-vllm}
 GENERATION_CONFIG=${GENERATION_CONFIG:-'{"temperature":1.0,"top_p":0.95,"top_k":20}'}
 PY=${PYTHON:-$( [ -f "$ROOT/.python" ] && cat "$ROOT/.python" || echo python3.12 )}
@@ -72,6 +72,14 @@ EXTRA=()
 [ -n "${STEP_LOG:-}" ] && EXTRA+=(VLLM_HPU_STEP_TIMER="$STEP_LOG")
 ARGS=()
 [ -n "${API_KEY:-}" ] && ARGS+=(--api-key "$API_KEY")
+# Prefix caching (section 18): attention KV through vLLM's prefix cache, GDN states as device snapshots
+if [ "${PREFIX_CACHE:-1}" = 1 ]; then
+  ARGS+=(--enable-prefix-caching)
+  EXTRA+=(VLLM_HPU_PREFIX_STATE_CACHE=1 VLLM_HPU_PREFIX_STATE_SLOTS="${PREFIX_STATE_SLOTS:-16}"
+    VLLM_HPU_PREFIX_STATE_INTERVAL="${PREFIX_STATE_INTERVAL:-16384}" VLLM_HPU_PREFIX_STATE_BLOCK=2048)
+else
+  ARGS+=(--no-enable-prefix-caching)
+fi
 
 CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HABANA_PROF_CONFIG
   PATH="/opt/habanalabs/bin:$PATH"
@@ -98,6 +106,9 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_FAST_DECODE_PREP=all VLLM_HPU_FAST_DECODE_PREP_VERIFY=256 VLLM_HPU_ENVS_CACHE=1
   VLLM_HPU_SHARED_PREFIX_DECODE=1 VLLM_HPU_SKIP_UNBACKED_BLOCK_LIST=1 VLLM_HPU_SHARE_GROUP_MASKS=1
   VLLM_HPU_UNIQUE_COMPILE_CODE=1 VLLM_HPU_FUSED_MODEL_ENTRY=1 VLLM_HPU_WARMUP_PHASE_GC=1
+  # prefill (section 18): context buckets every 64 pages (8K tokens) for 2048-token chunks above 256 pages;
+  # those chunks attend to the cached context as 8K-key slices stacked into one batched FusedSDPA call
+  VLLM_HPU_PROMPT_FINE_CTX_STEP=64 VLLM_HPU_PROMPT_FINE_CTX_MIN=256 VLLM_HPU_PREFILL_SPLIT_ATTN=1
   # full attention over the whole context per request: KV gathered once, FP8 matmuls, one softmax (section 17)
   VLLM_HPU_SHARED_PREFIX_ATTN=dense VLLM_HPU_DENSE_ATTN_QK=fp8 VLLM_HPU_DENSE_ATTN_AV=fp8
   # DFlash2 speculative decoding pipeline (sections 9-12)
@@ -132,7 +143,6 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   --tensor-parallel-size 1 --pipeline-parallel-size 1
   --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAX_NUM_SEQS"
   --kv-cache-memory-bytes $((KV_CACHE_GIB * 1024 * 1024 * 1024)) --kv-cache-dtype fp8_inc
-  --no-enable-prefix-caching
   --override-generation-config "$GENERATION_CONFIG"
   --enable-auto-tool-choice --tool-call-parser qwen3_xml
   --middleware dflash2_request_guard.DFlash2RequestGuard

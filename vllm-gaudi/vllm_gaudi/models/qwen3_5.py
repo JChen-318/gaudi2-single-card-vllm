@@ -5,6 +5,7 @@ from flashinfer_gaudi.gdn_decode import gated_delta_rule_mtp_packed
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import QwenGatedDeltaNetAttention
 from vllm.forward_context import get_forward_context
 from vllm_gaudi import envs
+from vllm_gaudi.v1.core.prefix_state_cache import block_state_caching
 
 import vllm_gaudi.envs as gaudi_envs
 from vllm_gaudi.ops.causal_conv1d_pytorch import (
@@ -273,7 +274,7 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         self._hpu_active_ssm_state = None
         if (attn_metadata is None or bool(getattr(attn_metadata, "is_prompt", False))
                 or not bool(getattr(attn_metadata, "direct_gdn_state", False))
-                or getattr(self.cache_config, "enable_prefix_caching", False) or _triton_gaudi_mode == "strict"):
+                or block_state_caching(self.cache_config) or _triton_gaudi_mode == "strict"):
             return
         indices = getattr(attn_metadata, "load_indices_tensor", None)
         if indices is None or not self.kv_cache:
@@ -312,7 +313,7 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         store_state_indices = self._resolve_state_indices(attn_metadata, "store_indices_tensor")
         num_accepted_tokens = getattr(attn_metadata, "num_accepted_tokens", None)
         gdn_initial_state_indices = self._resolve_state_indices(attn_metadata, "gdn_initial_state_indices")
-        if not getattr(self.cache_config, "enable_prefix_caching", False) and num_accepted_tokens is None:
+        if not block_state_caching(self.cache_config) and num_accepted_tokens is None:
             # The scheduler constructs equivalent load/store tensors in this
             # ordinary decode mode. A DFlash T1 transition instead reads the
             # accepted checkpoint and commits to the canonical base slot.
@@ -645,7 +646,7 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     round_before_activation=self.dflash_conv_round_before_activation,
                     full_query_valid_state=(self.dflash_full_query_conv and is_spec_decode and dflash_full_query
                                             and self.compact_state_group_offset is not None
-                                            and not getattr(self.cache_config, "enable_prefix_caching", True)),
+                                            and not block_state_caching(self.cache_config)),
                 )
                 if _triton_gaudi_mode == "strict":
                     triton_out = _try_triton_gdn_decode_packed(
@@ -687,7 +688,7 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                         # Compact no-prefix-cache state assigns a different
                         # contiguous slot to every verification token.
                         assume_distinct_checkpoints=(self.compact_state_group_offset is not None
-                                                     and not getattr(self.cache_config, "enable_prefix_caching", True)),
+                                                     and not block_state_caching(self.cache_config)),
                         checkpoint_start=checkpoint_start,
                         initial_state_indices=(gdn_initial_state_indices[:num_decodes]
                                                if gdn_initial_state_indices is not None else None),

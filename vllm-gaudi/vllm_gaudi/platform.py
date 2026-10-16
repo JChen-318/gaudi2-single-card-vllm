@@ -187,8 +187,30 @@ def _validate_hpu_dflash2_config(vllm_config: VllmConfig) -> None:
         raise ValueError("HPU DFlash2 currently supports only TP1/PP1/DP1")
     if vllm_config.lora_config is not None:
         raise ValueError("HPU DFlash2 does not yet support LoRA")
-    if vllm_config.cache_config.enable_prefix_caching:
-        raise ValueError("HPU DFlash2 requires prefix caching to be disabled")
+    if vllm_config.cache_config.enable_prefix_caching and not gaudi_envs.VLLM_HPU_PREFIX_STATE_CACHE:
+        raise ValueError("HPU DFlash2 requires prefix caching to be disabled (or VLLM_HPU_PREFIX_STATE_CACHE=1)")
+
+
+def _use_prefix_state_block(cache_config) -> None:
+    """Scheduler block of VLLM_HPU_PREFIX_STATE_BLOCK tokens for the GDN prefix state cache.
+
+    GDN state lives in compact slots plus snapshots (v1/core/prefix_state_cache.py), so the Mamba page only has to
+    fit the shared block; the block is the prefix-hit and snapshot granularity. Runs after the hybrid alignment,
+    which leaves the Mamba page padded to exactly one attention block."""
+    block = gaudi_envs.VLLM_HPU_PREFIX_STATE_BLOCK
+    current = cache_config.block_size
+    if current == block:
+        return
+    if current > block or cache_config.mamba_page_size_padded is None or cache_config.mamba_page_size_padded % current:
+        raise ValueError(f"VLLM_HPU_PREFIX_STATE_BLOCK={block} cannot replace the aligned block of {current} tokens "
+                         f"(Mamba page {cache_config.mamba_page_size_padded})")
+    page_per_token = cache_config.mamba_page_size_padded // current
+    cache_config.block_size = block
+    if cache_config.mamba_cache_mode == "align":
+        cache_config.mamba_block_size = block
+    cache_config.mamba_page_size_padded = block * page_per_token
+    logger.info("GDN prefix state cache: block size %d -> %d tokens (Mamba page padded to %d bytes)", current, block,
+                cache_config.mamba_page_size_padded)
 
 
 class HpuPlatform(Platform):
@@ -573,6 +595,9 @@ class HpuPlatform(Platform):
             super().update_block_size_for_backend(vllm_config)
         else:
             super().update_block_size_for_backend(vllm_config)
+            if (gaudi_envs.VLLM_HPU_PREFIX_STATE_CACHE and cache_config.enable_prefix_caching and model_config is not None
+                    and model_config.is_hybrid):
+                _use_prefix_state_block(cache_config)
 
     @classmethod
     def is_pin_memory_available(cls):
