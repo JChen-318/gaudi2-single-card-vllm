@@ -2008,7 +2008,7 @@ def trim_attn_metadata(metadata: HPUAttentionMetadataV1) -> object:
         'has_initial_states_p', 'last_chunk_indices_p', 'load_indices_tensor', 'store_indices_tensor',
         'num_accepted_tokens', 'query_start_loc', 'query_start_loc_p', 'padding_mask_flat', 'blocks_caching_range',
         'mamba_chunks_to_block_mapping', 'seqlens_offsets_for_blocks', 'direct_gdn_state', 'dflash_full_query', 'causal',
-        'attention_groups', 'gdn_initial_state_indices'
+        'attention_groups', 'gdn_initial_state_indices', 'kv_mirror_tail'
     ])
     if metadata.attention_groups is not None:
         attention_metadata = custom_tuple_replace(
@@ -2613,6 +2613,65 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         if defragmenter is not None and defragmenter.enabled:
             return np.vectorize(self._resolve_block, otypes=[np.int64])(table)
         return table
+
+    def _init_decode_kv_mirror(self, kv_caches, draft_layers, framework_layout):
+        """Allocate the contiguous K/V mirrors of the target attention layers (v1/worker/decode_kv_mirror.py)."""
+        self._decode_kv_mirror = None
+        pages = gaudi_envs.VLLM_HPU_DECODE_KV_MIRROR_PAGES
+        if pages <= 0:
+            return
+        if (framework_layout or not self._shared_prefix_decode_enabled()
+                or gaudi_envs.VLLM_HPU_SHARED_PREFIX_ATTN != "dense"):
+            logger.warning("VLLM_HPU_DECODE_KV_MIRROR_PAGES needs shared-prefix decode with "
+                           "VLLM_HPU_SHARED_PREFIX_ATTN=dense; ignored")
+            return
+        from vllm_gaudi.v1.worker.decode_kv_mirror import DecodeKVMirror, copy_pages
+        mirror = DecodeKVMirror(pages, gaudi_envs.VLLM_HPU_DECODE_KV_MIRROR_MIN_PAGES, self.attn_block_size,
+                                self.device, torch.compile(copy_pages, backend="hpu_backend", dynamic=False))
+        forward_layers = self.vllm_config.compilation_config.static_forward_context
+        allocated = 0
+        for gid, group in enumerate(self.kv_cache_config.kv_cache_groups):
+            if not isinstance(group.kv_cache_spec, FullAttentionSpec):
+                continue
+            for layer_name in group.layer_names:
+                if layer_name in draft_layers or layer_name in self.runner_only_attn_layers:
+                    continue
+                implementation = getattr(forward_layers.get(layer_name), 'impl', None)
+                cache = kv_caches.get(layer_name)
+                if not isinstance(implementation, HPUAttentionImpl) or not isinstance(cache, tuple):
+                    continue
+                key_cache, value_cache = cache[0], cache[1]
+                if key_cache is None or value_cache is None or key_cache.dim() != 3:
+                    continue
+                mirror.attach(gid, implementation, key_cache, value_cache)
+                allocated += mirror.bytes_per_layer(key_cache.shape[1], key_cache.shape[2], key_cache.element_size())
+        if not mirror.layers:
+            logger.warning("Decode KV mirror: no target attention layer found; disabled")
+            return
+        # compile the refresh copy now (one fixed shape) rather than on the first long request
+        layers = next(iter(mirror.layers.values()))
+        zeros = torch.zeros(1, dtype=torch.int64).expand(512).contiguous().to(self.device)
+        mirror._copy(*layers[0], zeros, zeros, self.attn_block_size)
+        self._decode_kv_mirror = mirror
+        logger.info("Decode KV mirror: %d layers in %d groups, %d pages (%d tokens) each, %.2f GiB; used for "
+                    "single-request decode buckets of %d-%d pages", sum(len(v) for v in mirror.layers.values()),
+                    len(mirror.layers), pages, pages * self.attn_block_size, allocated / 2**30, mirror.min_pages,
+                    pages)
+
+    def _decode_kv_mirror_tail(self, req_ids, starts, padded_batch, bucket_pages):
+        """Tail pages for this decode forward if it reads the K/V mirror (None: gather path); copies missing
+        mirror pages first."""
+        mirror = getattr(self, '_decode_kv_mirror', None)
+        if mirror is None:
+            return None
+        batch = self.input_batch
+
+        def page_table(gid, req_id, count):
+            row = batch.req_id_to_index[req_id]
+            return self._shared_prefix_page_table(batch.block_table[gid].get_cpu_tensor().numpy()[row:row + 1, :count])[0]
+
+        return mirror.plan(list(req_ids), [int(start) for start in starts], padded_batch, bucket_pages, page_table,
+                           warmup=bool(getattr(self, 'warmup_mode', False)))
 
     def _shared_prefix_buffers(self, table, context_lens, query_lens, query_width, padded_batch):
         """Paged-attention buffers with one page list per request; ``table`` holds resolved pages."""
@@ -4109,6 +4168,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             req_id = self.input_batch.req_ids[batch_idx]
             seq_num_computed_tokens = self.input_batch.num_computed_tokens_cpu[batch_idx]
             seq_num_scheduled_tokens = num_scheduled_tokens[batch_idx]
+            if getattr(self, '_decode_kv_mirror', None) is not None and not warmup:
+                self._decode_kv_mirror.note_write(req_id, int(seq_num_computed_tokens))
 
             token_ids = self.input_batch.token_ids_cpu[batch_idx, seq_num_computed_tokens:seq_num_computed_tokens +
                                                        seq_num_scheduled_tokens].tolist()
@@ -5516,6 +5577,11 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 seq_lens_tensor=seq_lens_tensor,
                 query_start_loc=query_start_loc_p,
             )
+            mirror_tail = self._decode_kv_mirror_tail(self.input_batch.req_ids[:num_decodes],
+                                                      context_lens[:num_decodes], padded_batch_size,
+                                                      int(block_list.shape[0]) if shared_prefix else 0)
+            if mirror_tail is not None:
+                attn_metadata.kv_mirror_tail = async_h2d_copy(torch.from_numpy(mirror_tail), device=self.device)
             attn_metadata = self._route_legacy_decode_groups(
                 attn_metadata, num_decodes, num_tokens_per_req, context_lens, num_tokens, padded_batch_size,
                 main_buffers=(block_groups, block_usage))
@@ -9869,6 +9935,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             bind_kv_cache(kv_caches, self.vllm_config.compilation_config.static_forward_context, self.kv_caches)
 
         self._set_cache_block_capacity(num_blocks, max_attention_kernel_blocks)
+        self._init_decode_kv_mirror(kv_caches, draft_layers, use_framework_kv_cache_layout)
 
         # Initialize the GDN compact slot free-list.
         # The free-list contains base-slot IDs [0..max_num_reqs-1].

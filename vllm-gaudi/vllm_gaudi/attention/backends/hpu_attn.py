@@ -183,6 +183,9 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     # that block. Keep the default causal so existing prefill paths are
     # unchanged, while allowing the draft model to opt out explicitly.
     causal: bool = True
+    # [2] logical pages to copy into the K/V mirror before attending over it
+    # (single-request long-context decode, v1/worker/decode_kv_mirror.py).
+    kv_mirror_tail: Optional[torch.Tensor] = None
     # A fixed group-indexed tuple of nonrecursive metadata objects. GDN keeps
     # the common metadata; attention selects its scheduler-owned pages.
     attention_groups: Optional[tuple] = None
@@ -770,11 +773,19 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             if key_cache is None:
                 return torch.zeros(*output_shape, dtype=query.dtype, device=query.device)
 
+            # Single-request long-context decode reads the layer's contiguous K/V mirror instead of gathering
+            # the pages (v1/worker/decode_kv_mirror.py); the runner sets the tail only for mirror-shaped graphs.
+            mirror_tail = getattr(attn_metadata, "kv_mirror_tail", None)
+            kv_mirror = getattr(self, "_kv_mirror", None)
+            mirror_args = {}
+            if mirror_tail is not None and kv_mirror is not None:
+                mirror_args["kv_mirror"] = (kv_mirror[0], kv_mirror[1], mirror_tail)
             output = HPUPagedAttention.forward_decode(query=query,
                                                       block_mapping=block_mapping,
                                                       block_bias=attn_bias,
                                                       block_groups=block_groups,
                                                       position_bias=self.position_bias,
+                                                      **mirror_args,
                                                       **self.common_attention_args(block_list, key_cache, value_cache,
                                                                                    attn_metadata.block_size, k_scales,
                                                                                    v_scales))

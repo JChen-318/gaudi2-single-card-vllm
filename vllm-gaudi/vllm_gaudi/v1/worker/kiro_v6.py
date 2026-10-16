@@ -689,9 +689,16 @@ class DeltaPrepare:
 
         usage_dev = h2d(usage, metadata.block_usage)
         accepted_dev = h2d(np.asarray(accepted, dtype=np.int64), metadata.num_accepted_tokens)
+        # The K/V mirror tail moves with the context (v1/worker/decode_kv_mirror.py); same shapes, same decision.
+        plan_mirror = getattr(runner, "_decode_kv_mirror_tail", None)
+        mirror_tail = plan_mirror(req_ids, starts, padded, int(metadata.block_list.shape[0])) if plan_mirror else None
+        if (mirror_tail is None) != (getattr(metadata, "kv_mirror_tail", None) is None):
+            return None
+        mirror = {} if mirror_tail is None else {
+            "kv_mirror_tail": async_h2d_copy(torch.from_numpy(mirror_tail), device=device)}
         main = replace(metadata, slot_mapping=async_h2d_copy(slots_for(first).to(metadata.slot_mapping.dtype),
                                                              device=device),
-                       block_usage=usage_dev, num_accepted_tokens=accepted_dev, attention_groups=None)
+                       block_usage=usage_dev, num_accepted_tokens=accepted_dev, attention_groups=None, **mirror)
         groups = list(metadata.attention_groups)
         groups[first] = replace(main, attention_groups=None)
         for gid in others:

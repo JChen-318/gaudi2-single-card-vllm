@@ -14,6 +14,8 @@
 | `PREFIX_CACHE` | 1 | 前缀缓存：请求开头与之前某个请求相同的部分直接复用（第 18 节）。0 = 关闭 |
 | `PREFIX_STATE_SLOTS` | 16 | GDN 状态快照个数，每个约 155 MB 显存，按最近使用淘汰 |
 | `PREFIX_STATE_INTERVAL` | 16384 | 除每个提示词末尾前的最后一个 2048 边界外，每隔多少 token 存一份快照（2048 的倍数） |
+| `DECODE_KV_MIRROR_PAGES` | 2048 | 单个长请求 decode 用的连续 KV 副本长度（每页 128 token），16 层共 `PAGES × 4 MiB`，2048 页 = 8 GiB、覆盖 26.2 万 token（第 19 节）。0 = 关闭，长上下文每轮回到整段 gather |
+| `PRIME_AFTER_START` | 1 | `--daemon` 启动后，等 `/health` 正常再发几组单路、两路请求（`tools/prime.py`），让预热没覆盖的形状在启动阶段编译。0 = 关闭 |
 | `PIN_MAIN_CPU` | 空 | 预热后把引擎主线程固定到这个 CPU，并让其他线程避开它和它的超线程兄弟。选一个空闲的物理核，约省 0.3 ms/轮 |
 | `DATA_DIR` | `~/.cache/gaudi2-single-card-vllm` | 编译缓存、日志、运行期控制文件 |
 | `GENERATION_CONFIG` | `temperature 1.0, top_p 0.95, top_k 20` | 请求没给采样参数时的默认值 |
@@ -27,7 +29,7 @@ decode 分桶由 `serve.sh` 根据配置计算：batch 取 1 到 `MAX_NUM_SEQS`�
 
 - 分桶越多，预热越久。`MAX_NUM_SEQS=1` 时页数减半，预热也更短。
 - `MAX_NUM_SEQS` 大于 2 时，融合 GDN 核心只覆盖 batch ≤ 2（`FLASHINFER_GAUDI_MTP_PREPARED_MAX_BATCH=2`），更大的 batch 会走 PyTorch 参考实现，结果正确但较慢。这一组合没有测过速度。
-- 加大 `KV_CACHE_GIB` 前先看启动日志里的显存占用：权重约 32.5 GB，预热编译的图约 12.8 GiB，前缀缓存的快照约 2.4 GiB（16 个），卡上共 94.6 GiB。
+- 加大 `KV_CACHE_GIB` 前先看启动日志里的显存占用：权重约 32.5 GB，预热编译的图约 12.8 GiB，前缀缓存的快照约 2.4 GiB（16 个），KV 镜像 8 GiB（`DECODE_KV_MIRROR_PAGES=2048`），卡上共 94.6 GiB。
 
 ## serve.sh 中的调优开关
 
@@ -49,11 +51,13 @@ decode 分桶由 `serve.sh` 根据配置计算：batch 取 1 到 `MAX_NUM_SEQS`�
 | `VLLM_HPU_PIN_MAIN_CPU` | 引擎线程绑核（由 `PIN_MAIN_CPU` 设置） | 12 |
 | `FLASHINFER_GAUDI_MTP_FUSED`、`FLASHINFER_GAUDI_MTP_FUSED_GATHER` | 融合 GDN 验证核心；先取初始状态，避免每层多一次检查点复制 | 13、15 |
 | `VLLM_HPU_SHARED_PREFIX_ATTN=dense`（`VLLM_HPU_DENSE_ATTN_QK` / `_AV`） | 全注意力对每个请求的整段上下文做一次 softmax，KV 只 gather 一次；QK/AV 用 FP8 | 17 |
+| `VLLM_HPU_DECODE_KV_MIRROR_PAGES` / `_MIN_PAGES` | 单个请求、页桶 256–2048 页的 decode：每层读一份连续的 KV 副本，图内每轮只补拷本轮 token 所在的一两页，不再整段 gather；主机侧补齐缺的页 | 19 |
 | `--enable-prefix-caching` + `VLLM_HPU_PREFIX_STATE_CACHE`（`_SLOTS`、`_INTERVAL`、`_BLOCK`） | 前缀缓存：注意力 KV（目标与草稿）走 vLLM 的前缀缓存，GDN 状态在固定位置存设备快照，命中时恢复到请求的紧凑状态槽；调度块 2048 token。由 `PREFIX_CACHE` 控制 | 18 |
 | `VLLM_HPU_PROMPT_FINE_CTX_STEP` / `_MIN` | 2048 token 的 prefill 段在上下文 256 页以上每 64 页（8K token）加一个分桶，补齐不超过 8K | 18 |
 | `VLLM_HPU_PREFILL_SPLIT_ATTN` | 上述分桶上的 prefill 段，对已缓存上下文的注意力切成 8K 一片、叠成一个批次一次 FusedSDPA；只有最后一片带掩码，图与上下文长度无关 | 18 |
 | `--kv-cache-dtype fp8_inc`（同时 `env -u QUANT_CONFIG`） | FP8 KV 缓存，不校准 | 14 |
 | `VLLM_HPU_WARMUP_PHASE_GC` | 预热时不在每个分桶前后强制 `gc.collect()` | 14 |
+| `TORCH_LOGS=recompiles` | 每次 Dynamo 重新编译记一行原因（运行中意外编译时能查到是哪个 guard 失败） | 19 |
 | `TORCH_COMPILE_JOB_ID` + `TORCHINDUCTOR_CACHE_DIR` | Dynamo 本地 PGO：记住哪些维度是动态的，下次启动直接按动态编译 | 15 |
 | `GC_KERNEL_PATH` + `KIRO_TPC_LIBS` + `PT_HPU_RECIPE_CACHE_CONFIG` | 三个内核库经转接层加载；设备端编译结果缓存到磁盘 | 9.4 |
 

@@ -437,7 +437,8 @@ def flat_pa_query_block(query, key_cache, value_cache, block_list, block_mapping
 
 
 def flat_pa_query_dense(query, key_cache, value_cache, block_list, block_bias, block_groups, block_size, scale,
-                        position_bias=None, sinks=None, k_scales=None, v_scales=None, **ignored_args):
+                        position_bias=None, sinks=None, k_scales=None, v_scales=None, kv_mirror=None,
+                        **ignored_args):
     """flat_pa_query_block's contract, computed over each request's whole context at once.
 
     See extension/dense_decode_attn.py. Same inputs and output layout; the page-wise softmax bookkeeping, the
@@ -450,7 +451,7 @@ def flat_pa_query_dense(query, key_cache, value_cache, block_list, block_bias, b
     from vllm_gaudi.extension.dense_decode_attn import dense_query_block_attention
     return dense_query_block_attention(query, key_cache, value_cache, block_list, block_bias, block_groups,
                                        block_size, scale, qk=gaudi_envs.VLLM_HPU_DENSE_ATTN_QK,
-                                       av=gaudi_envs.VLLM_HPU_DENSE_ATTN_AV)
+                                       av=gaudi_envs.VLLM_HPU_DENSE_ATTN_AV, mirror=kv_mirror)
 
 
 def _flex_prompt_attention(

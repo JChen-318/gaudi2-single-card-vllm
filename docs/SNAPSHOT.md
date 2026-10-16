@@ -44,3 +44,7 @@
 ## 2026-10-16 更新（v16）
 
 新增 `vllm-gaudi/vllm_gaudi/v1/core/prefix_state_cache.py`（前缀缓存的 GDN 状态快照）和 `extension/prefill_split_attn.py`（叠片 prefill 注意力），修改 `envs.py`、`extension/ops.py`、`extension/bucketing/common.py`、`models/qwen3_5.py`、`patches.py`、`platform.py`、`v1/worker/hpu_model_runner.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 18 节）。`extension/utils.py` 在开发中改过、最终未使用，已恢复原样。均与生产服务所用安装逐字节核对过，清单已同步。
+
+## 2026-10-16 更新（v17）
+
+新增 `vllm-gaudi/vllm_gaudi/v1/worker/decode_kv_mirror.py`（单请求 decode 的连续 KV 镜像）和 `tools/prime.py`（启动后的请求预热），修改 `envs.py`、`attention/backends/hpu_attn.py`、`extension/dense_decode_attn.py`、`extension/ops.py`、`v1/worker/hpu_model_runner.py`、`v1/worker/kiro_v6.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 19 节）。均与生产服务所用安装逐字节核对过，清单已同步。

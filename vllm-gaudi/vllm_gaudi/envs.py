@@ -1936,6 +1936,13 @@ environment_variables["VLLM_HPU_SHARED_PREFIX_ATTN"] = lambda: os.environ.get(
     "VLLM_HPU_SHARED_PREFIX_ATTN", "block").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_QK"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_QK", "fp8").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_AV"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_AV", "fp8").strip().lower()
+# Contiguous K/V mirror for single-request decode with the dense path (v1/worker/decode_kv_mirror.py): PAGES is the
+# mirror length in KV pages per target attention layer (0 = off; device memory 2 * PAGES * page * kv_heads * head
+# bytes per layer); decode graphs of batch 1 whose page bucket is in [MIN_PAGES, PAGES] read the mirror.
+environment_variables["VLLM_HPU_DECODE_KV_MIRROR_PAGES"] = lambda: int(
+    os.environ.get("VLLM_HPU_DECODE_KV_MIRROR_PAGES", "0"))
+environment_variables["VLLM_HPU_DECODE_KV_MIRROR_MIN_PAGES"] = lambda: int(
+    os.environ.get("VLLM_HPU_DECODE_KV_MIRROR_MIN_PAGES", "256"))
 # Prefix caching for hybrid GDN models with compact recurrent state (v1/core/prefix_state_cache.py): attention KV
 # through vLLM's prefix caching, GDN states as device snapshots at chosen block boundaries. Needs
 # --enable-prefix-caching. SLOTS snapshots are kept (LRU); INTERVAL is the snapshot spacing in tokens besides the

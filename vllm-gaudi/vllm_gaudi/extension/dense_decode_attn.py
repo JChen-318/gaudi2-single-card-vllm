@@ -18,6 +18,8 @@ level, so the math can be checked on CPU.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 
 # Probabilities are <= 1; scale them into the E4M3 range before an FP8 AV matmul
@@ -53,10 +55,14 @@ def fp8_bmm(a: torch.Tensor, b: torch.Tensor, trans_b: bool, a_scale_inv: float 
 
 def dense_query_block_attention(query: torch.Tensor, key_cache: torch.Tensor, value_cache: torch.Tensor,
                                 block_list: torch.Tensor, block_bias: torch.Tensor, block_groups: torch.Tensor,
-                                block_size: int, scale: float, qk: str = "fp8", av: str = "fp8") -> torch.Tensor:
+                                block_size: int, scale: float, qk: str = "fp8", av: str = "fp8",
+                                mirror: Optional[tuple] = None) -> torch.Tensor:
     """``query`` [requests, width, q_heads * head]; caches [slots, kv_heads, head]; ``block_list`` [pages];
     ``block_bias`` [pages, width, block_size] (0 / -inf); ``block_groups`` [pages] (request row, -1 = padding).
     ``qk`` / ``av``: "fp8" or "bf16" matmul for an FP8 cache (a BF16 cache always uses BF16).
+    ``mirror``: ``(key_mirror, value_mirror, tail)`` for one request whose pages the mirrors hold in logical order
+    (v1/worker/decode_kv_mirror.py): the ``tail`` pages (logical indices) are copied from the cache first, then
+    the mirrors are read in place instead of gathering the pages.
     Returns [requests * width, q_heads, head]."""
     requests, width, hidden = query.shape
     _, kv_heads, head = key_cache.shape
@@ -69,8 +75,17 @@ def dense_query_block_attention(query: torch.Tensor, key_cache: torch.Tensor, va
     def gather(cache: torch.Tensor) -> torch.Tensor:  # [kv_heads, keys, head], cache dtype
         return cache.unflatten(0, (-1, block_size)).index_select(0, block_list).flatten(0, 1).transpose(0, 1)
 
-    k = gather(key_cache)
-    v = gather(value_cache)
+    if mirror is not None:
+        key_mirror, value_mirror, tail = mirror
+        physical = block_list.index_select(0, tail)
+        for cache, copy in ((key_cache, key_mirror), (value_cache, value_mirror)):
+            copy.unflatten(0, (-1, block_size)).index_copy_(0, tail,
+                                                           cache.unflatten(0, (-1, block_size)).index_select(0, physical))
+        k = key_mirror[:keys].transpose(0, 1)
+        v = value_mirror[:keys].transpose(0, 1)
+    else:
+        k = gather(key_cache)
+        v = gather(value_cache)
     # rows ordered (request, token, head within the kv group) under each kv head
     q = (query * scale).view(requests, width, kv_heads, group, head).permute(2, 0, 1, 3, 4)
     q = q.reshape(kv_heads, requests * width * group, head)

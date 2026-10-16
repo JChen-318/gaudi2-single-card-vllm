@@ -111,6 +111,9 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_PROMPT_FINE_CTX_STEP=64 VLLM_HPU_PROMPT_FINE_CTX_MIN=256 VLLM_HPU_PREFILL_SPLIT_ATTN=1
   # full attention over the whole context per request: KV gathered once, FP8 matmuls, one softmax (section 17)
   VLLM_HPU_SHARED_PREFIX_ATTN=dense VLLM_HPU_DENSE_ATTN_QK=fp8 VLLM_HPU_DENSE_ATTN_AV=fp8
+  # single-request decode from 32K tokens on reads a contiguous per-layer KV copy instead of gathering the pages
+  # every round (section 19); DECODE_KV_MIRROR_PAGES=2048 covers 256K tokens with 8 GiB, 0 turns it off
+  VLLM_HPU_DECODE_KV_MIRROR_PAGES="${DECODE_KV_MIRROR_PAGES:-2048}" VLLM_HPU_DECODE_KV_MIRROR_MIN_PAGES=256
   # DFlash2 speculative decoding pipeline (sections 9-12)
   VLLM_HPU_DFLASH2_PAGE_BUCKETS=1 VLLM_HPU_DFLASH2_DRAFT_STACK=1 VLLM_HPU_DFLASH2_DIRECT_CHECKPOINTS=1
   VLLM_HPU_DFLASH2_LOOKAHEAD=1 VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE=1 VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA=1
@@ -137,6 +140,8 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_DECODE_BUCKETING_STRATEGY=lin VLLM_DECODE_BS_BUCKET_MIN=1 VLLM_DECODE_BS_BUCKET_STEP=3 VLLM_DECODE_BS_BUCKET_MAX="$MAX_NUM_SEQS"
   VLLM_DECODE_BLOCK_BUCKET_MIN=1 VLLM_DECODE_BLOCK_BUCKET_STEP=128 VLLM_DECODE_BLOCK_BUCKET_MAX="$BLOCK_MAX"
   VLLM_WORKER_MULTIPROC_METHOD=spawn HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+  # one log line per Dynamo recompilation with its guard failure (a runtime compile shows up with its cause)
+  TORCH_LOGS="${TORCH_LOGS:-recompiles}"
   "${EXTRA[@]}"
   "$PY" -m vllm.entrypoints.cli.main serve "$TARGET_MODEL"
   --served-model-name "$SERVED_MODEL_NAME"
@@ -157,6 +162,13 @@ if [ "$DAEMON" = 1 ]; then
   echo $! > "$DATA_DIR/serve.pid"
   echo "started (pid $!), log: $LOG"
   echo "ready when: curl -s http://$HOST:$PORT/health returns 200 (watch: tail -f $LOG)"
+  if [ "${PRIME_AFTER_START:-1}" = 1 ]; then
+    # after /health: a few single and simultaneous requests, so shapes the warm-up missed compile now
+    PRIME_LOG=${LOG%.log}-prime.log
+    API_KEY=${API_KEY:-} setsid nohup "$PY" "$ROOT/tools/prime.py" --base "http://127.0.0.1:$PORT" \
+      --model "$SERVED_MODEL_NAME" > "$PRIME_LOG" 2>&1 < /dev/null &
+    echo "priming after start: $PRIME_LOG"
+  fi
 else
   exec "${CMD[@]}"
 fi
