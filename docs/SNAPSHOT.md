@@ -48,3 +48,8 @@
 ## 2026-10-16 更新（v17）
 
 新增 `vllm-gaudi/vllm_gaudi/v1/worker/decode_kv_mirror.py`（单请求 decode 的连续 KV 镜像）和 `tools/prime.py`（启动后的请求预热），修改 `envs.py`、`attention/backends/hpu_attn.py`、`extension/dense_decode_attn.py`、`extension/ops.py`、`v1/worker/hpu_model_runner.py`、`v1/worker/kiro_v6.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 19 节）。均与生产服务所用安装逐字节核对过，清单已同步。
+
+## 2026-10-17 更新（Docker）
+
+新增 `docker/`（Dockerfile、compose 配置、容器入口脚本、`docker.env.example`）、`.dockerignore` 和 [Docker 部署](DOCKER.md)。`requirements/lock-sdk-1.24.1.txt` 补上了实测环境里有、但原清单漏掉的包（构建 vllm-core 需要的 `setuptools-rust`、`semantic-version`、`vcs-versioning`，每次启动都会导入的 `oss-harmony`（提供 `openai_harmony` 模块）和 `pycountry`，以及 `outlines`、`diskcache`、`genson`、`distro`、`uvloop`、`httptools`、`websockets`、`triton`）。这些是在 Intel 的干净镜像里构建时发现的，按原清单在新机器上安装同样会缺。
+

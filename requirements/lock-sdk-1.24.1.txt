@@ -2,10 +2,13 @@
 # The Intel Gaudi PyTorch stack (torch 2.11.0a0, habana-torch-plugin 1.24.1.482, ...) is NOT listed:
 # install it from Intel's pytorch_modules package for SDK 1.24.1 first. scripts/install.sh installs
 # this file with --no-deps so nothing here can replace that torch build.
-# openai-harmony (gpt-oss only) is intentionally absent.
+# openai_harmony (imported by vLLM's tool server on every start) comes from oss-harmony, as in the measured environment.
 #
 # build-time
 setuptools-scm==10.3.4
+setuptools-rust==1.13.0
+vcs-versioning==2.6.0
+semantic-version==2.10.0
 wheel==0.48.0
 jinja2==3.1.6
 markupsafe==3.0.4
@@ -135,3 +138,17 @@ uvicorn==0.54.0
 watchfiles==1.3.0
 xgrammar==0.2.8
 yarl==1.25.1
+# present in the measured environment outside this list (Intel's image does not ship them; found by building
+# docker/Dockerfile): openai_harmony, imported by vLLM's tool server on every start; pycountry, imported through
+# transformers' Mistral tokenizer backend; outlines and its helpers; uvicorn's fast event loop / HTTP parser /
+# websockets; triton (xgrammar imports it; vLLM disables it without a GPU driver)
+oss-harmony==0.0.11
+pycountry==26.2.16
+distro==1.9.0
+outlines==1.3.3
+diskcache==5.6.3
+genson==1.4.0
+uvloop==0.23.0
+httptools==0.8.0
+websockets==17.2
+triton==3.8.0

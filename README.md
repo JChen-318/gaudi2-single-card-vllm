@@ -87,6 +87,19 @@ scripts/serve.sh --daemon            # 后台启动，日志在 ~/.cache/gaudi2-
 scripts/smoke_test.sh --wait         # 等服务就绪后发几条请求，检查输出和速度
 ```
 
+### 用 Docker 运行
+
+主机只需装好 Gaudi 驱动 1.24.1 和 Docker。镜像以 Intel 1.24.1 官方 PyTorch 镜像为基础，在镜像里完成上面的安装和编译；主机重启后容器自动启动。
+
+```bash
+cp config/serve.env.example config/serve.env && vi config/serve.env     # 模型路径、DATA_DIR 等
+cp docker/docker.env.example docker/docker.env && vi docker/docker.env   # 上面文件的路径、模型目录、DATA_DIR
+docker compose -f docker/compose.yaml --env-file docker/docker.env up -d --build
+scripts/smoke_test.sh --wait
+```
+
+详见 [Docker 部署](docs/DOCKER.md)。
+
 **第一次启动需要 30–45 分钟**：加载模型约 4 分钟，然后预热，把每种形状的计算图编译一遍。设备端的编译结果会缓存到磁盘，之后每次重启约 25 分钟。只想先确认能跑通，可以用 `scripts/serve.sh --skip-warmup`，约 6 分钟就能接受请求，但每种新形状第一次出现时都要现场编译，这种模式不要拿来测速。
 
 停止服务：`scripts/stop.sh`。
@@ -139,6 +152,7 @@ scripts/bench.sh --full   # 再加 15 类提示词逐条测速
 ```text
 scripts/             安装、编译、启动、停止、冒烟测试、测速脚本
 config/              服务配置模板 serve.env.example
+docker/              Dockerfile、compose 配置与容器入口脚本
 requirements/        与实测环境一致的 Python 依赖版本
 vllm-core/           配套 vLLM 主程序
 vllm-gaudi/          Gaudi 插件、FlashInfer-Gaudi（Python 包与 C++/TPC 源码）与设备算子
@@ -156,6 +170,7 @@ docs/                安装、配置、优化记录与源码来源说明
 - [安装说明](docs/INSTALL.md)：Gaudi 驱动与 PyTorch、依赖、常见安装问题。
 - [配置说明](docs/CONFIG.md)：`serve.env` 各项、`serve.sh` 中每个调优开关、systemd、改并发与上下文。
 - [优化说明与实测](docs/OPTIMIZATION.md)：具体改动、效果和仍待验证的方向。
+- [Docker 部署](docs/DOCKER.md)：镜像构建、开机自启动和运维。
 - [离线验证](validation/README.md)：测试范围与运行方法。
 - [测速与分析工具](tools/README.md)：性能测量和诊断入口。
 - [源码来源说明](docs/SNAPSHOT.md)：各组件来源与文件校验方式。

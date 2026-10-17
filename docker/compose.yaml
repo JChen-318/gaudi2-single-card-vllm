@@ -1,0 +1,39 @@
+# docker compose -f docker/compose.yaml --env-file docker/docker.env up -d     (docs/DOCKER.md)
+# Starts again by itself after a host reboot (restart: unless-stopped) once the Docker daemon is up.
+name: gaudi2-single-card-vllm
+services:
+  vllm:
+    image: ${IMAGE:-gaudi2-single-card-vllm:latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        APT_MIRROR: ${APT_MIRROR:-}
+    container_name: ${CONTAINER_NAME:-gaudi2-vllm}
+    restart: unless-stopped
+    init: true                      # forwards docker stop's TERM and reaps the priming process
+    stop_grace_period: 150s         # the engine can take up to 2 minutes to exit on TERM
+    network_mode: host              # listens on HOST:PORT from serve.env
+    ipc: host
+    cap_add: [SYS_NICE]             # PIN_MAIN_CPU thread placement
+    ulimits:
+      memlock: -1                   # Gaudi pins host memory
+    devices:                        # the Gaudi card (Intel's habana container runtime is not needed)
+      - ${ACCEL_DEVICE:-/dev/accel/accel0}
+      - ${ACCEL_CONTROL_DEVICE:-/dev/accel/accel_controlD0}
+      # the card's RDMA (NIC) device: device acquisition initializes HCCL, which opens it even on one card
+      - ${UVERBS_DEVICE:-/dev/infiniband/uverbs0}
+    volumes:
+      # serve.env is read as is; its model paths and DATA_DIR are mounted at the same paths inside the container
+      - ${SERVE_ENV:?set SERVE_ENV in docker/docker.env}:/opt/gaudi2-single-card-vllm/config/serve.env:ro
+      - ${DATA_DIR:?set DATA_DIR in docker/docker.env}:${DATA_DIR}
+      # rslave: a network share mounted on demand (e.g. systemd automount) after the container started shows up
+      - type: bind
+        source: ${MODEL_ROOT:?set MODEL_ROOT in docker/docker.env}
+        target: ${MODEL_ROOT}
+        read_only: true
+        bind: {propagation: rslave}
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "3"}

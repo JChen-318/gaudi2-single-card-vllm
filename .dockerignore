@@ -1,0 +1,10 @@
+.git
+.venv
+.python
+build
+config/serve.env
+docker/docker.env
+**/__pycache__
+**/*.pyc
+**/*.so
+*.log
