@@ -768,3 +768,8 @@ import vllm.model_executor.models.qwen3_5 as _qwen3_5_module  # noqa: E402
 _gdn_module.QwenGatedDeltaNetAttention = HPUGatedDeltaNetAttention
 _qwen3_next_module.QwenGatedDeltaNetAttention = HPUGatedDeltaNetAttention
 _qwen3_5_module.QwenGatedDeltaNetAttention = HPUGatedDeltaNetAttention
+
+# Fixed-shape (bucketed) vision tower when VLLM_HPU_VISION_BUCKETS is set (models/qwen3_vision_buckets.py).
+from vllm_gaudi.models.qwen3_vision_buckets import install as _install_vision_buckets  # noqa: E402
+
+_install_vision_buckets()

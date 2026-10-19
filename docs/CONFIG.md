@@ -15,6 +15,10 @@
 | `PREFIX_STATE_SLOTS` | 16 | GDN 状态快照个数，每个约 155 MB 显存，按最近使用淘汰 |
 | `PREFIX_STATE_INTERVAL` | 16384 | 除每个提示词末尾前的最后一个 2048 边界外，每隔多少 token 存一份快照（2048 的倍数） |
 | `DECODE_KV_MIRROR_PAGES` | 2048 | 单个长请求 decode 用的连续 KV 副本长度（每页 128 token），16 层共 `PAGES × 4 MiB`，2048 页 = 8 GiB、覆盖 26.2 万 token（第 19 节）。0 = 关闭，长上下文每轮回到整段 gather |
+| `VISION` | 1 | 图片输入：1 = 接受 OpenAI 格式的 `image_url` 图片（第 20 节），0 = 只接受文字（不加载视觉编码器）。视频和音频始终拒绝 |
+| `VISION_MAX_IMAGES` | 4 | 每个请求最多几张图 |
+| `VISION_MAX_PIXELS` | 1048576 | 图片缩放后的最大像素数（约 1024×1024，最多 1024 个图片 token）。每 32×32 像素一个 token，一张图的 token 要放进一个 2048 token 的 prefill 段，所以不要超过约 200 万 |
+| `VISION_BUCKETS` | `256,576,1024,1600,2304,3136,4096` | 视觉编码器的固定尺寸（patch 数，每 16×16 像素一个 patch）。每张图补齐到不小于它的最小一档，预热时每档编译一次；比最大一档还大的图按原尺寸计算（首次会现编译） |
 | `PRIME_AFTER_START` | 1 | `--daemon` 启动后，等 `/health` 正常再发几组单路、两路请求（`tools/prime.py`），让预热没覆盖的形状在启动阶段编译。0 = 关闭 |
 | `PIN_MAIN_CPU` | 空 | 预热后把引擎主线程固定到这个 CPU，并让其他线程避开它和它的超线程兄弟。选一个空闲的物理核，约省 0.3 ms/轮 |
 | `DATA_DIR` | `~/.cache/gaudi2-single-card-vllm` | 编译缓存、日志、运行期控制文件 |
@@ -51,6 +55,7 @@ decode 分桶由 `serve.sh` 根据配置计算：batch 取 1 到 `MAX_NUM_SEQS`�
 | `VLLM_HPU_PIN_MAIN_CPU` | 引擎线程绑核（由 `PIN_MAIN_CPU` 设置） | 12 |
 | `FLASHINFER_GAUDI_MTP_FUSED`、`FLASHINFER_GAUDI_MTP_FUSED_GATHER` | 融合 GDN 验证核心；先取初始状态，避免每层多一次检查点复制 | 13、15 |
 | `VLLM_HPU_SHARED_PREFIX_ATTN=dense`（`VLLM_HPU_DENSE_ATTN_QK` / `_AV`） | 全注意力对每个请求的整段上下文做一次 softmax，KV 只 gather 一次；QK/AV 用 FP8 | 17 |
+| `VLLM_HPU_ALLOW_MULTIMODAL`、`VLLM_HPU_VISION_BUCKETS`、`VLLM_MULTIMODAL_RESOLUTIONS`、`--limit-mm-per-prompt`、`--mm-processor-kwargs` | 图片输入：请求过滤和 DFlash2 放行图片，视觉编码器补齐到固定尺寸并在预热时编译，限制每个请求的图片数和像素。由 `VISION` 系列设置控制 | 20 |
 | `VLLM_HPU_DECODE_KV_MIRROR_PAGES` / `_MIN_PAGES` | 单个请求、页桶 256–2048 页的 decode：每层读一份连续的 KV 副本，图内每轮只补拷本轮 token 所在的一两页，不再整段 gather；主机侧补齐缺的页 | 19 |
 | `--enable-prefix-caching` + `VLLM_HPU_PREFIX_STATE_CACHE`（`_SLOTS`、`_INTERVAL`、`_BLOCK`） | 前缀缓存：注意力 KV（目标与草稿）走 vLLM 的前缀缓存，GDN 状态在固定位置存设备快照，命中时恢复到请求的紧凑状态槽；调度块 2048 token。由 `PREFIX_CACHE` 控制 | 18 |
 | `VLLM_HPU_PROMPT_FINE_CTX_STEP` / `_MIN` | 2048 token 的 prefill 段在上下文 256 页以上每 64 页（8K token）加一个分桶，补齐不超过 8K | 18 |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -45,6 +46,9 @@ class DFlash2RequestGuard:
 
     def __init__(self, app: Any) -> None:
         self.app = app
+        # VLLM_HPU_ALLOW_MULTIMODAL=1 lets image requests through (serve.sh sets it with VISION=1). Audio and
+        # video stay rejected: the measured configuration warms and limits images only.
+        self.allow_images = os.environ.get("VLLM_HPU_ALLOW_MULTIMODAL", "0").lower() in ("1", "true")
 
     @staticmethod
     def _error(message: str) -> JSONResponse:
@@ -60,19 +64,23 @@ class DFlash2RequestGuard:
             status_code=400,
         )
 
+    _IMAGE_TYPES = {"image", "image_url", "input_image"}
+
     @classmethod
-    def _contains_multimodal_input(cls, value: Any) -> bool:
+    def _contains_multimodal_input(cls, value: Any, allow_images: bool = False) -> bool:
+        types = cls._MULTIMODAL_TYPES - cls._IMAGE_TYPES if allow_images else cls._MULTIMODAL_TYPES
+        keys = cls._MULTIMODAL_KEYS - cls._IMAGE_TYPES if allow_images else cls._MULTIMODAL_KEYS
         if isinstance(value, list):
-            return any(cls._contains_multimodal_input(item) for item in value)
+            return any(cls._contains_multimodal_input(item, allow_images) for item in value)
         if not isinstance(value, dict):
             return False
 
         part_type = value.get("type")
-        if isinstance(part_type, str) and part_type.lower() in cls._MULTIMODAL_TYPES:
+        if isinstance(part_type, str) and part_type.lower() in types:
             return True
-        if any(key in value and value[key] is not None for key in cls._MULTIMODAL_KEYS):
+        if any(key in value and value[key] is not None for key in keys):
             return True
-        return any(cls._contains_multimodal_input(item) for item in value.values())
+        return any(cls._contains_multimodal_input(item, allow_images) for item in value.values())
 
     @classmethod
     def _uses_structured_output(cls, payload: dict[str, Any]) -> bool:
@@ -189,10 +197,13 @@ class DFlash2RequestGuard:
             if (
                 payload.get("prompt_embeds") is not None
                 or payload.get("multi_modal_data") is not None
-                or self._contains_multimodal_input(payload.get("messages"))
-                or self._contains_multimodal_input(payload.get("input"))
+                or self._contains_multimodal_input(payload.get("messages"), self.allow_images)
+                or self._contains_multimodal_input(payload.get("input"), self.allow_images)
             ):
                 response = self._error(
+                    "HPU DFlash2 currently supports text and image requests only; audio, video, "
+                    "raw multi_modal_data and prompt embeddings are disabled."
+                    if self.allow_images else
                     "HPU DFlash2 currently supports text-only requests; "
                     "multimodal inputs and prompt embeddings are disabled."
                 )

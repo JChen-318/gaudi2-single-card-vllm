@@ -8842,7 +8842,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         is_image_warmup = (mm_config is not None and mm_config.limit_per_prompt.get("image") is not None
                            and "image" in self.mm_budget.mm_limits and self.mm_budget.mm_limits['image'] != 0)
         is_video_warmup = (mm_config is not None and mm_config.limit_per_prompt.get("video") is not None
-                           and "video" in self.mm_budget.mm_limits and self.mm_budget.mm_limits['video'] != 999)
+                           and "video" in self.mm_budget.mm_limits
+                           and self.mm_budget.mm_limits['video'] not in (0, 999))
         # Get width/height from config if available for warmup_lists
         warmup_lists = []
 
@@ -10628,8 +10629,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         )
         if not req_ids:
             return output
+        # Image requests (VLLM_HPU_ALLOW_MULTIMODAL): the drafter keeps its own 1-D token positions and sees the
+        # image placeholder tokens plus the target's hidden states there; verification keeps the output exact.
         multimodal_req_ids = [req_id for req_id in req_ids if self.requests[req_id].mm_features]
-        if multimodal_req_ids:
+        if multimodal_req_ids and not gaudi_envs.VLLM_HPU_ALLOW_MULTIMODAL:
             raise NotImplementedError(
                 "HPU DFlash2 currently supports text-only requests; received multimodal inputs for "
                 f"{multimodal_req_ids}")

@@ -80,6 +80,23 @@ if [ "${PREFIX_CACHE:-1}" = 1 ]; then
 else
   ARGS+=(--no-enable-prefix-caching)
 fi
+# Image input (vision tower): images are resized to at most VISION_MAX_PIXELS (one prefill chunk holds the
+# image tokens: 32x32 pixels per token), VISION_MAX_IMAGES per request. The tower pads every image to one of
+# VISION_BUCKETS patch counts (16x16 pixels per patch) so that a new image size compiles nothing; one square
+# image per bucket is compiled during warm-up. VISION=0 serves text only and does not load the vision tower.
+if [ "${VISION:-1}" = 1 ]; then
+  VISION_BUCKETS=${VISION_BUCKETS:-256,576,1024,1600,2304,3136,4096}
+  WARM=""
+  for n in ${VISION_BUCKETS//,/ }; do
+    side=$(awk -v n="$n" 'BEGIN { printf "%d", sqrt(n) * 16 }'); WARM="${WARM:+$WARM,}${side}x${side}x1"
+  done
+  ARGS+=(--limit-mm-per-prompt "{\"image\": ${VISION_MAX_IMAGES:-4}, \"video\": 0}"
+    --mm-processor-kwargs "{\"max_pixels\": ${VISION_MAX_PIXELS:-1048576}}")
+  EXTRA+=(VLLM_HPU_ALLOW_MULTIMODAL=1 VLLM_HPU_VISION_BUCKETS="$VISION_BUCKETS"
+    VLLM_MULTIMODAL_RESOLUTIONS="${VISION_WARMUP_RESOLUTIONS:-$WARM}")
+else
+  ARGS+=(--limit-mm-per-prompt '{"image": 0, "video": 0}')
+fi
 
 CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HABANA_PROF_CONFIG
   PATH="/opt/habanalabs/bin:$PATH"

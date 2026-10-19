@@ -12,6 +12,7 @@
 | `gcmp.py <a.json> <b.json>` | 比较两份 `greedy2.py` 输出，给出公共前缀长度 |
 | `needle.py <近似 token 数> [位置...]` | 长上下文检索检查：在日志类长文本的指定位置（比例，默认 0.05 / 0.5 / 0.95）藏一个 6 位口令，`temperature=0` 下问答，统计答对数 |
 | `prefix_check.py <近似 token 数> [轮数] [max_tokens]` | 前缀缓存检查：多轮对话每轮发三次（一次正常、两次带新 `cache_salt` 强制重算），输出首 token 时间和输出是否一致 |
+| `vision_check.py [--base URL] [--model 名字]` | 图片输入检查（需要 Pillow）：程序生成写有单词和彩色圆形的图片（8 种尺寸），`temperature=0` 下问单词和颜色并自动核对；另有两图同问、同一张图的第二轮追问（前缀缓存）、之后的纯文字请求。每项一行 JSON，含耗时 |
 | `../prime.py [--base URL] [--model 名字]` | 启动后的请求预热：等 `/health` 正常，依次发单路、两路同时（随机采样 / greedy / 混合）、一路 decode 中加入另一路的请求，每步一行 JSON，超过 30 秒的步骤标 `slow`。`serve.sh --daemon` 会自动运行 |
 | `prefill_attn_bench.py [quick\|sweep\|split\|splitsweep\|splitparts\|twocall]` | 卡上单层 prefill 注意力基准（一个 2048 token 的段对长上下文）：原实现、细分桶、分片与叠片各变体的耗时和误差。需要停掉服务，并带上 `serve.sh` 里的环境变量运行 |
 | `bench_multi.py [max_tokens]` | 15 类提示词（中英文解释与写作、多种代码、数学、翻译、摘要、JSON、表格、思考模式、复述）逐条单路测速，再测 3 组两路并发；输出每轮接受草稿数和每轮耗时 |

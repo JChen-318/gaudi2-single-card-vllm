@@ -22,6 +22,7 @@ FP8 · 非 greedy 投机解码 · 长上下文 · OpenAI 兼容接口
 - **单卡 FP8 推理**：针对 Gaudi2 的权重布局、混合注意力和 GDN 状态管理进行适配。
 - **非 greedy 投机解码**：支持本地 DFlash2/MTP 路径，保留 temperature、top-p、top-k 采样，不以切换 greedy 换取速度。
 - **长上下文优化**：验证 token 共用历史 KV 前缀，KV 每轮只读一次；全注意力对整段上下文做一次 softmax，不再逐页拆分合并；单个长请求 decode 时每层保留一份连续的 KV 副本，每轮只补拷最新的一两页，不再每轮整段 gather（18 万 token 每轮 40.9 → 35 ms）；扩展解码分桶覆盖范围。
+- **图片输入**：模型自带的视觉编码器在投机解码路径上可用，每张图补齐到 7 个固定尺寸之一，预热时全部编译，新尺寸的图片不再现编译（原生分辨率时首次遇到一种尺寸要多等 10–55 秒）。
 - **前缀缓存**：重复发送同一段开头的请求（多轮对话、智能体反复提交历史）直接复用已算好的部分。注意力 KV 走 vLLM 的前缀缓存，GDN 递推状态在固定位置存设备快照，decode 用的紧凑状态布局不变。9.5 万 token 对话的续写轮首 token 从 26.7 秒降到 0.9 秒。
 - **更快的长 prefill**：长提示词按 2048 token 分段计算，上下文分桶细化到每 8K 一档；每段对已缓存上下文的注意力切成 8K 一片、叠成一个批次一次算完，只有可能含补齐的最后一片带掩码。17.7 万 token 的首 token 从约 115 秒降到 61 秒。
 - **主机与设备流水重叠**：按预测提前提交下一轮主模型和采样，紧接着用设备上的采样结果提交该轮草稿，不等主机读回；下一步核对一致后直接复用，下一轮输入增量生成，两路并发同样适用。
@@ -128,6 +129,7 @@ print(r.choices[0].message.content)
 ```
 
 - 默认采样参数 `temperature=1.0, top_p=0.95, top_k=20`，请求里可以覆盖。思考模式由 `chat_template_kwargs.enable_thinking` 控制。
+- 支持图片输入（OpenAI 格式的 `image_url`，URL 或 base64），每个请求最多 4 张，自动缩放到约 100 万像素以内；不支持视频和音频。示例：`"content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}, {"type": "text", "text": "图里写了什么？"}]`。`config/serve.env` 里 `VISION=0` 可关闭。
 - 支持流式输出和工具调用，`tool_choice` 只能是 `"auto"`。投机解码路径不支持以下请求，服务会直接返回错误：强制工具调用、结构化输出（`response_format` / guided decoding）、各类惩罚、`min_p` / `min_tokens`、`logit_bias`、`logprobs`、思考预算。
 - 对外提供服务时，在 `config/serve.env` 里设置 `API_KEY`，`HOST` 改为 `0.0.0.0`，并放在防火墙或反向代理之后。
 

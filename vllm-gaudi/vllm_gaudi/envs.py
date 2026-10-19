@@ -1936,6 +1936,9 @@ environment_variables["VLLM_HPU_SHARED_PREFIX_ATTN"] = lambda: os.environ.get(
     "VLLM_HPU_SHARED_PREFIX_ATTN", "block").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_QK"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_QK", "fp8").strip().lower()
 environment_variables["VLLM_HPU_DENSE_ATTN_AV"] = lambda: os.environ.get("VLLM_HPU_DENSE_ATTN_AV", "fp8").strip().lower()
+# Image requests with DFlash2 (serve.sh VISION=1; the API request guard reads the same variable).
+environment_variables["VLLM_HPU_ALLOW_MULTIMODAL"] = lambda: os.environ.get(
+    "VLLM_HPU_ALLOW_MULTIMODAL", "0").lower() in ("1", "true")
 # Contiguous K/V mirror for single-request decode with the dense path (v1/worker/decode_kv_mirror.py): PAGES is the
 # mirror length in KV pages per target attention layer (0 = off; device memory 2 * PAGES * page * kv_heads * head
 # bytes per layer); decode graphs of batch 1 whose page bucket is in [MIN_PAGES, PAGES] read the mirror.

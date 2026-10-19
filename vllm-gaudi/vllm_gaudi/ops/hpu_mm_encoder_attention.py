@@ -41,7 +41,23 @@ class HpuMMEncoderAttention(MMEncoderAttention):
             HPUFusedSDPA = kernels.fsdpa()
             fsdpa_op = ModuleFusedSDPA(HPUFusedSDPA)
 
-            if cu_seqlens is None:
+            # A padded image from the bucketed vision tower (models/qwen3_vision_buckets.py): one call over the
+            # bucket with its block-diagonal mask instead of per-sequence calls of varying length.
+            from vllm_gaudi.models.qwen3_vision_buckets import current
+            bucketed, mask = current(q_len)
+            if cu_seqlens is None and bucketed:
+                out = fsdpa_op(query,
+                               key,
+                               value,
+                               mask,
+                               dropout_p=0.0,
+                               is_causal=False,
+                               scale=self.scale,
+                               softmax_mode="fast",
+                               recompute_mode=True,
+                               valid_sequence_lengths=None)
+                return out.transpose(1, 2)  # [b, s, h, d], like the per-sequence path below
+            elif cu_seqlens is None:
                 out = fsdpa_op(query,
                                key,
                                value,

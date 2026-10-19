@@ -53,3 +53,7 @@
 
 新增 `docker/`（Dockerfile、compose 配置、容器入口脚本、`docker.env.example`）、`.dockerignore` 和 [Docker 部署](DOCKER.md)。`requirements/lock-sdk-1.24.1.txt` 补上了实测环境里有、但原清单漏掉的包（构建 vllm-core 需要的 `setuptools-rust`、`semantic-version`、`vcs-versioning`，每次启动都会导入的 `oss-harmony`（提供 `openai_harmony` 模块）和 `pycountry`，以及 `outlines`、`diskcache`、`genson`、`distro`、`uvloop`、`httptools`、`websockets`、`triton`）。这些是在 Intel 的干净镜像里构建时发现的，按原清单在新机器上安装同样会缺。
 
+## 2026-10-19 更新（图片输入）
+
+新增 `vllm-gaudi/vllm_gaudi/models/qwen3_vision_buckets.py`（视觉编码器补齐到固定尺寸）、`tools/bench/vision_check.py` 和 `validation/core/test_vision_input.py`，修改 `vllm-gaudi/dflash2_request_guard.py`、`envs.py`、`models/qwen3_5.py`、`ops/hpu_mm_encoder_attention.py`、`v1/worker/hpu_model_runner.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 20 节）。
+

@@ -1,5 +1,5 @@
 {
-  "captured_at_utc": "2026-10-16T08:45:40.101579+00:00",
+  "captured_at_utc": "2026-10-19T08:26:52.387722+00:00",
   "source_only": true,
   "components": [
     {
@@ -4679,8 +4679,8 @@
       "bytes": 650
     },
     "vllm-gaudi/dflash2_request_guard.py": {
-      "sha256": "7947331696b99c23383776c425b7ff35fbceaf42fc167b93007943df009b87fe",
-      "bytes": 7731
+      "sha256": "f8117f74baf986a7c1d84fdbd04a9e8b7c8fd951a3f2f8442ae3601beeaa6160",
+      "bytes": 8581
     },
     "vllm-gaudi/docs/.nav.yml": {
       "sha256": "4438c8bca53774a1f95c5cce2e1fca0e3af589f3f4f054cc009529514d2cc1bb",
@@ -9943,8 +9943,8 @@
       "bytes": 4481
     },
     "vllm-gaudi/vllm_gaudi/envs.py": {
-      "sha256": "ce671c1218f2f710f612758af7e7ab3ccccd0ae039abfea24a24bccd9a4d42a2",
-      "bytes": 119500
+      "sha256": "13b627fde454a447d46ada86de4c60ac932cd15a036c9fc16a1bcf68f004573d",
+      "bytes": 119738
     },
     "vllm-gaudi/vllm_gaudi/extension/__init__.py": {
       "sha256": "9cb19ecd3ad381e6466571d13b8b7abe1f2fb5236a40331791f3d26b1360fc4a",
@@ -10167,8 +10167,8 @@
       "bytes": 24677
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_5.py": {
-      "sha256": "f36c2708a555aae40244f92c3cf662eaaf3ed80b8c814b21c05011c9777dc0d1",
-      "bytes": 38563
+      "sha256": "b8889702e11021f4a4c34d39c2c725ae13536931f6e90167fae841d0dce36176",
+      "bytes": 38799
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_moe.py": {
       "sha256": "0a457215a49c0563949e2d7b8d1ccfe547eb2211d137b3609cf83a85bfbc4981",
@@ -10743,8 +10743,8 @@
       "bytes": 24030
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_mm_encoder_attention.py": {
-      "sha256": "5b29b1ba9fccd8dcb5e5d1bd2ce6c5c29d4f3ea091879405d6fad7e6460eddcf",
-      "bytes": 3484
+      "sha256": "18feab85fc8c3abc76acd612abd1c9fe2f28b0a261b4a50e50f55faa69e13801",
+      "bytes": 4409
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_modelopt.py": {
       "sha256": "ada42509f83adf8cb46c2717295c79f847fc53810009760e34be4716ca7f6402",
@@ -11023,8 +11023,8 @@
       "bytes": 39467
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_model_runner.py": {
-      "sha256": "efcbb6fa7e105382fa6daad6eae9ca1d7de2f32c6785a6f8172d43487c6d4662",
-      "bytes": 602724
+      "sha256": "af4edf87a6aa39c3d14b39822bcdec99257ef5c956d8386772981e42d93d0356",
+      "bytes": 603029
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_worker.py": {
       "sha256": "cd837c57e3de99c3ea872d7ae00368b0026bd4cf23ecf86dfac613ddc55675a1",
@@ -38261,6 +38261,10 @@
     "vllm-gaudi/vllm_gaudi/extension/prefill_split_attn.py": {
       "sha256": "1707b5f79dba5b4184252b638da89276ff77b263fce80796a7ed041ee37c79dc",
       "bytes": 4198
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen3_vision_buckets.py": {
+      "sha256": "1c85312a97e76124e70427e0391139f70bacde358cf7df7b3e18af11a99c7377",
+      "bytes": 4365
     },
     "vllm-gaudi/vllm_gaudi/v1/core/prefix_state_cache.py": {
       "sha256": "48e3c708718342fa38b2bd71bb9839a57a388cfdc29a01adcc439ce76bdc77c1",
