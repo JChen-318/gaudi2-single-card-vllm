@@ -18,6 +18,7 @@ them in ``_update_states`` before the step's forward, so a save captures the sta
 DFlash2 draft KV at position p depends only on the target features at p, so it needs no EAGLE-style last-block
 drop and the draft group is reused like the target groups.
 """
+import copy
 from collections import OrderedDict
 
 import torch
@@ -195,6 +196,9 @@ def _aligned_split(self, request, num_new_tokens: int, num_new_local_computed_to
     prefill_end = max(request.num_prompt_tokens, request.num_tokens - 1)
     if start >= prefill_end:
         return num_new_tokens
+    last_chunk = getattr(self, "_hpu_last_chunk_limit", None)
+    if last_chunk is not None and start + num_new_tokens >= prefill_end:
+        num_new_tokens = min(num_new_tokens, last_chunk)  # the request drafts right after this chunk
     stops = snapshot_positions(start, start + num_new_tokens, prefill_end, self.block_size,
                                gaudi_envs.VLLM_HPU_PREFIX_STATE_INTERVAL)
     _debug("split %s start %d tokens %d stops %s", request.request_id, start, num_new_tokens, stops)
@@ -211,6 +215,21 @@ def _mamba_find_longest_cache_hit(cls, block_hashes, max_length, kv_cache_group_
     if reg is not None and block_pool.hash_block_size == block_size:
         num_blocks = reg.hit_blocks(block_hashes, max_length // block_size)
     return tuple([block_pool.null_block] * num_blocks for _ in kv_cache_group_ids), num_blocks * block_size
+
+
+def _reserve_draft_slots_on_top(self) -> None:
+    """Keep the draft slots out of the prefill chunks: the scheduler gives each request the batch limit minus the slots,
+    so chunks fall short of the block and leave a remainder before each snapshot position that costs a whole step.
+    The scheduler gets its own config with the slots added; the worker's limit and buffers stay as they are, and
+    max_num_scheduled_tokens still caps a step. Only a prefill chunk reaches the batch limit: it drafts nothing."""
+    spec = self.vllm_config.speculative_config
+    draft_slots = spec.max_num_new_slots_for_drafting if spec is not None else 0
+    if draft_slots <= 0:
+        return
+    limit = self.scheduler_config.max_num_batched_tokens
+    self.scheduler_config = copy.copy(self.scheduler_config)
+    self.scheduler_config.max_num_batched_tokens = limit + draft_slots
+    self._hpu_last_chunk_limit = limit - draft_slots
 
 
 def _init_scheduler(self) -> None:
@@ -232,6 +251,7 @@ def _init_scheduler(self) -> None:
         raise ValueError(f"VLLM_HPU_PREFIX_STATE_INTERVAL ({interval}) must be a positive multiple of the block size "
                          f"({block_size})")
     _registry = SnapshotRegistry(gaudi_envs.VLLM_HPU_PREFIX_STATE_SLOTS)
+    _reserve_draft_slots_on_top(self)
     # DFlash2 needs no last-block drop (see module docstring); the coordinator's fallback would flag every group,
     # Mamba included, and disable reuse.
     coordinator = self.kv_cache_manager.coordinator

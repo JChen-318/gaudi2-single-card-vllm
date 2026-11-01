@@ -72,6 +72,11 @@ EXTRA=()
 [ -n "${STEP_LOG:-}" ] && EXTRA+=(VLLM_HPU_STEP_TIMER="$STEP_LOG")
 ARGS=()
 [ -n "${API_KEY:-}" ] && ARGS+=(--api-key "$API_KEY")
+# Device trace (tools/README.md): PROFILER_DIR adds /start_profile and /stop_profile; diagnostics, not for production
+if [ -n "${PROFILER_DIR:-}" ]; then
+  ARGS+=(--profiler-config "{\"profiler\":\"torch\",\"torch_profiler_dir\":\"$PROFILER_DIR\",\"torch_profiler_use_gzip\":true}")
+  EXTRA+=(VLLM_PROFILER_ENABLED=full)
+fi
 # Prefix caching (section 18): attention KV through vLLM's prefix cache, GDN states as device snapshots
 if [ "${PREFIX_CACHE:-1}" = 1 ]; then
   ARGS+=(--enable-prefix-caching)
@@ -133,6 +138,7 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_DECODE_KV_MIRROR_PAGES="${DECODE_KV_MIRROR_PAGES:-2048}" VLLM_HPU_DECODE_KV_MIRROR_MIN_PAGES=256
   # DFlash2 speculative decoding pipeline (sections 9-12)
   VLLM_HPU_DFLASH2_PAGE_BUCKETS=1 VLLM_HPU_DFLASH2_DRAFT_STACK=1 VLLM_HPU_DFLASH2_DIRECT_CHECKPOINTS=1
+  VLLM_HPU_DFLASH2_FULL_QUERY_CONV=1
   VLLM_HPU_DFLASH2_LOOKAHEAD=1 VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE=1 VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA=1
   VLLM_HPU_DFLASH2_PREDRAFT=1 VLLM_HPU_DFLASH2_PREDRAFT_VERIFY=32 VLLM_HPU_DFLASH2_EARLY_READBACK=1
   VLLM_HPU_DFLASH2_CPU_INPUTS=1 VLLM_HPU_DFLASH2_CONTEXT_REGION=1

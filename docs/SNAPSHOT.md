@@ -57,3 +57,6 @@
 
 新增 `vllm-gaudi/vllm_gaudi/models/qwen3_vision_buckets.py`（视觉编码器补齐到固定尺寸）、`tools/bench/vision_check.py` 和 `validation/core/test_vision_input.py`，修改 `vllm-gaudi/dflash2_request_guard.py`、`envs.py`、`models/qwen3_5.py`、`ops/hpu_mm_encoder_attention.py`、`v1/worker/hpu_model_runner.py` 和 `scripts/serve.sh`（[优化说明](OPTIMIZATION.md) 第 20 节）。
 
+## 2026-11-01 更新（prefill/decode trace）
+
+`vllm-gaudi/vllm_gaudi/v1/core/prefix_state_cache.py` 和 `ops/hpu_rotary_embedding.py` 更新，`scripts/serve.sh` 增加 `PROFILER_DIR` 和 `VLLM_HPU_DFLASH2_FULL_QUERY_CONV=1`，`tools/` 增加 trace 分析和 GEMM 标定脚本，对应[优化说明](OPTIMIZATION.md)第 21 节。

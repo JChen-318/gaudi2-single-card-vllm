@@ -664,7 +664,8 @@ class HPUMRotaryEmbedding(MRotaryEmbedding):
             assert positions.shape[-1] == 1, "Expected last dimension to be 1 for 3d positions"
             positions = positions.squeeze(-1)
         num_tokens = positions.shape[-1]
-        cos_sin = self.cos_sin_cache[positions]
+        # not cos_sin_cache[positions]: advanced indexing adds a chain of integer nodes for negative indices
+        cos_sin = self.cos_sin_cache.index_select(0, positions.flatten()).view(*positions.shape, -1)
         cos, sin = cos_sin.chunk(2, dim=-1)
         if positions.ndim == 2:
             assert self.mrope_section

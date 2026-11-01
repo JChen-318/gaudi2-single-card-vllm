@@ -47,6 +47,7 @@ def make_manager(num_blocks=400, use_eagle=False):
     if use_eagle:
         # what the patched Scheduler.__init__ does for DFlash2 (use_eagle() is true for it)
         stub = SimpleNamespace(has_mamba_layers=True, kv_cache_manager=manager, block_size=B, hash_block_size=B,
+                               vllm_config=SimpleNamespace(speculative_config=None),
                                cache_config=SimpleNamespace(enable_prefix_caching=True, mamba_cache_mode="align",
                                                             block_size=B))
         psc._init_scheduler(stub)
@@ -131,6 +132,58 @@ def test_split_stops_at_snapshot_positions():
     assert psc._aligned_split(sched, req, 20) == 14
     req.num_computed_tokens = 144
     assert psc._aligned_split(sched, req, 6) == 6
+
+
+def budget_scheduler(limit, draft_slots):
+    config = SimpleNamespace(max_num_batched_tokens=limit, max_num_scheduled_tokens=limit)
+    sched = SimpleNamespace(scheduler_config=config, block_size=B, max_num_scheduled_tokens=limit, vllm_config=SimpleNamespace(
+        scheduler_config=config, speculative_config=SimpleNamespace(max_num_new_slots_for_drafting=draft_slots)))
+    psc._reserve_draft_slots_on_top(sched)
+    return sched
+
+
+def test_chunks_fill_the_block_and_the_budget_stays_valid():
+    """Same arithmetic as Scheduler.schedule: request budget, then the input budget it asserts is not negative."""
+    limit, draft = 2 * B, 3
+    sched = budget_scheduler(limit, draft)
+    assert sched.vllm_config.scheduler_config.max_num_batched_tokens == limit  # the worker's view is untouched
+    input_budget = sched.scheduler_config.max_num_batched_tokens
+    chunk = min(sched.max_num_scheduled_tokens, input_budget - draft)
+    assert chunk == limit
+    assert input_budget - (chunk + draft) >= 0
+
+    req = make_request("r", range(20 * B))
+    sizes = []
+    while req.num_computed_tokens < 128:
+        n = psc._aligned_split(sched, req, chunk)
+        sizes.append(n)
+        req.num_computed_tokens += n
+    assert sizes == [limit] * (128 // limit)  # no remainder before the snapshot at 64 and 128
+
+
+def test_a_decoding_request_still_gets_its_draft_slots():
+    limit, draft = 2 * B, 3
+    sched = budget_scheduler(limit, draft)
+    decode = 1 + draft
+    token_budget = sched.max_num_scheduled_tokens - decode
+    input_budget = sched.scheduler_config.max_num_batched_tokens - (decode + draft)
+    prefill = min(token_budget, input_budget - draft)
+    assert prefill + decode + draft <= limit  # with the decode's drafts the step still fits the worker
+
+
+def test_the_chunk_that_ends_a_prefill_leaves_room_for_drafts():
+    limit, draft = B, 3
+    sched = budget_scheduler(limit, draft)
+    req = make_request("r", range(4 * B))
+    req.num_computed_tokens = 3 * B
+    assert psc._aligned_split(sched, req, limit) == limit - draft
+
+
+def test_no_speculation_changes_nothing():
+    config = SimpleNamespace(max_num_batched_tokens=64)
+    sched = SimpleNamespace(scheduler_config=config, vllm_config=SimpleNamespace(speculative_config=None))
+    psc._reserve_draft_slots_on_top(sched)
+    assert sched.scheduler_config is config and config.max_num_batched_tokens == 64
 
 
 @pytest.mark.parametrize("use_eagle", [False, True])

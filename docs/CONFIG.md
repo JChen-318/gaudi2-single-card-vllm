@@ -19,6 +19,7 @@
 | `VISION_MAX_IMAGES` | 4 | 每个请求最多几张图 |
 | `VISION_MAX_PIXELS` | 1048576 | 图片缩放后的最大像素数（约 1024×1024，最多 1024 个图片 token）。每 32×32 像素一个 token，一张图的 token 要放进一个 2048 token 的 prefill 段，所以不要超过约 200 万 |
 | `VISION_BUCKETS` | `256,576,1024,1600,2304,3136,4096` | 视觉编码器的固定尺寸（patch 数，每 16×16 像素一个 patch）。每张图补齐到不小于它的最小一档，预热时每档编译一次；比最大一档还大的图按原尺寸计算（首次会现编译） |
+| `PROFILER_DIR` | 空 | 非空时开启 torch profiler 的 `/start_profile`、`/stop_profile`，trace 写到这个目录（诊断用，见 tools/README.md） |
 | `PRIME_AFTER_START` | 1 | `--daemon` 启动后，等 `/health` 正常再发几组单路、两路请求（`tools/prime.py`），让预热没覆盖的形状在启动阶段编译。0 = 关闭 |
 | `PIN_MAIN_CPU` | 空 | 预热后把引擎主线程固定到这个 CPU，并让其他线程避开它和它的超线程兄弟。选一个空闲的物理核，约省 0.3 ms/轮 |
 | `DATA_DIR` | `~/.cache/gaudi2-single-card-vllm` | 编译缓存、日志、运行期控制文件 |
@@ -59,6 +60,7 @@ decode 分桶由 `serve.sh` 根据配置计算：batch 取 1 到 `MAX_NUM_SEQS`�
 | `VLLM_HPU_DECODE_KV_MIRROR_PAGES` / `_MIN_PAGES` | 单个请求、页桶 256–2048 页的 decode：每层读一份连续的 KV 副本，图内每轮只补拷本轮 token 所在的一两页，不再整段 gather；主机侧补齐缺的页 | 19 |
 | `--enable-prefix-caching` + `VLLM_HPU_PREFIX_STATE_CACHE`（`_SLOTS`、`_INTERVAL`、`_BLOCK`） | 前缀缓存：注意力 KV（目标与草稿）走 vLLM 的前缀缓存，GDN 状态在固定位置存设备快照，命中时恢复到请求的紧凑状态槽；调度块 2048 token。由 `PREFIX_CACHE` 控制 | 18 |
 | `VLLM_HPU_PROMPT_FINE_CTX_STEP` / `_MIN` | 2048 token 的 prefill 段在上下文 256 页以上每 64 页（8K token）加一个分桶，补齐不超过 8K | 18 |
+| `VLLM_HPU_DFLASH2_FULL_QUERY_CONV` | 验证块完整时去掉 GDN 卷积状态的掩码和冗余读取，算术不变 | 21 |
 | `VLLM_HPU_PREFILL_SPLIT_ATTN` | 上述分桶上的 prefill 段，对已缓存上下文的注意力切成 8K 一片、叠成一个批次一次 FusedSDPA；只有最后一片带掩码，图与上下文长度无关 | 18 |
 | `--kv-cache-dtype fp8_inc`（同时 `env -u QUANT_CONFIG`） | FP8 KV 缓存，不校准 | 14 |
 | `VLLM_HPU_WARMUP_PHASE_GC` | 预热时不在每个分桶前后强制 `gc.collect()` | 14 |

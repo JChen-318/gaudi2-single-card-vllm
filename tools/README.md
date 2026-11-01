@@ -15,6 +15,7 @@
 | `vision_check.py [--base URL] [--model 名字]` | 图片输入检查（需要 Pillow）：程序生成写有单词和彩色圆形的图片（8 种尺寸），`temperature=0` 下问单词和颜色并自动核对；另有两图同问、同一张图的第二轮追问（前缀缓存）、之后的纯文字请求。每项一行 JSON，含耗时 |
 | `../prime.py [--base URL] [--model 名字]` | 启动后的请求预热：等 `/health` 正常，依次发单路、两路同时（随机采样 / greedy / 混合）、一路 decode 中加入另一路的请求，每步一行 JSON，超过 30 秒的步骤标 `slow`。`serve.sh --daemon` 会自动运行 |
 | `prefill_attn_bench.py [quick\|sweep\|split\|splitsweep\|splitparts\|twocall]` | 卡上单层 prefill 注意力基准（一个 2048 token 的段对长上下文）：原实现、细分桶、分片与叠片各变体的耗时和误差。需要停掉服务，并带上 `serve.sh` 里的环境变量运行 |
+| `gemm_cal.py` | 卡上 GEMM 标定：不同形状相对官方峰值的利用率。需要停掉服务，并带上 `serve.sh` 里的环境变量运行 |
 | `bench_multi.py [max_tokens]` | 15 类提示词（中英文解释与写作、多种代码、数学、翻译、摘要、JSON、表格、思考模式、复述）逐条单路测速，再测 3 组两路并发；输出每轮接受草稿数和每轮耗时 |
 
 说明：
@@ -35,16 +36,19 @@
 | `trace_idle.py <trace>` | 设备空闲按主机阶段和间隙大小拆分 |
 | `gb_parse.py <log>` | 汇总 `TORCH_LOGS=graph_breaks` 的输出 |
 | `trace_regions.py <trace>` | 逐个编译区域列出主机提交时间、缓存查找耗时、自上一区域以来的设备空闲，以及主机领先设备多少 |
+| `trace_steps.py <trace>` | 长窗口 trace：逐步列出每段的形状和耗时，按 recipe 汇总设备时间 |
+| `trace_nodes.py <trace> <recipe 尾号,...> [行数]` | 指定 recipe 内按节点名汇总 wall 和引擎时间 |
+| `trace_dec.py <trace>` | 一轮 decode 按算子类别汇总，列出 recipe 时间线和设备空闲 |
 | `steps_stats.py <steps.log>` | 读 `VLLM_HPU_STEP_TIMER` 日志，按并发数给出每轮耗时的中位数和分位数（无需 profiler） |
 | `phase_stats.py <steps.log>` | 同一日志里的阶段标记：读回、下一轮准备、草稿提交、预提交主模型、预提交采样之间的主机耗时 |
 
 ### 采集方法
 
-启动时加 `--profiler-config '{"profiler":"torch","torch_profiler_dir":"<dir>","torch_profiler_use_gzip":true}'` 和 `VLLM_PROFILER_ENABLED=full`，然后在请求生成中途连续调用 `POST /start_profile` 和 `POST /stop_profile`，只采一轮。
+在 `serve.env` 设 `PROFILER_DIR=<dir>`（等于加 `--profiler-config` 和 `VLLM_PROFILER_ENABLED=full`），然后在请求生成中途连续调用 `POST /start_profile` 和 `POST /stop_profile`，只采一轮。
 
 ### 注意事项
 
-- **硬件 trace 默认是开的。** 采集整个请求会让 EngineCore 内存涨到 30 GiB 以上，`stop_profile` 可能卡住半小时。要么只采一两轮，要么用 `hl-prof-config --hw-trace off` 生成配置并通过 `HABANA_PROF_CONFIG` 指定。
+- **硬件 trace 默认是开的。** 采集整个请求会让 EngineCore 内存涨到 30 GiB 以上，`stop_profile` 可能卡住半小时。prefill 一段约 95 万事件、导出 2 分钟，3 秒窗口要导出约 6 分钟，引擎这期间不响应，大文件放在服务器上分析。要么只采一两轮，要么用 `hl-prof-config --hw-trace off` 生成配置并通过 `HABANA_PROF_CONFIG` 指定。
 - `hl-prof-config` 不接标准输入时会挂住，调用时加 `< /dev/null`。
 - 开 profiler 后的第一次采集带启动开销，主机侧耗时偏大，不要拿它做前后对比；设备侧内核耗时不受影响。
 - 只设 `VLLM_TORCH_PROFILER_DIR` 不会注册 profile 路由，必须用 `--profiler-config`。
