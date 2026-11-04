@@ -2,7 +2,7 @@
 
 # Gaudi2 Single-Card vLLM
 
-**27B FP8 inference on one Intel Gaudi2, with non-greedy speculative decoding.**
+**Qwen3.8-27B FP8 + DFlash2 FP16 on one Intel Gaudi2.**
 
 [![Hardware: Intel Gaudi2](https://img.shields.io/badge/Intel_Gaudi2-96_GiB_HBM-0071C5?style=flat-square)](#quick-start)
 [![Gaudi SDK: 1.24.1](https://img.shields.io/badge/Gaudi_SDK-1.24.1-4B5563?style=flat-square)](#requirements)
@@ -13,12 +13,14 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/inference-path.svg" width="100%" alt="Single-card inference: DFlash2 drafts candidates, the FP8 target model verifies them, and stochastic sampling produces the output.">
+  <img src="docs/assets/inference-path.svg" width="100%" alt="Single-card inference: a DFlash2 FP16 draft model proposes candidates, Qwen3.8-27B FP8 verifies them, and stochastic sampling produces the output. MTP layers are not required in the target checkpoint.">
 </p>
 
-A source snapshot combining vLLM, the Gaudi hardware plugin, and native kernels for **Qwen3.8-27B FP8** on a single **96 GiB Gaudi2**. It includes local DFlash2/MTP adaptations, installation and serving scripts, CPU-side validation, and performance tools.
+A source snapshot combining vLLM, the Gaudi hardware plugin, and native kernels to run a **Qwen3.8-27B FP8 target model + DFlash2 FP16 draft model** on a single **96 GiB Gaudi2**. It includes non-greedy speculative decoding, installation and serving scripts, CPU-side validation, and performance tools.
 
-The model name is the local checkpoint/service alias used by this project; its implementation uses the Qwen3.5 architecture. This is a community engineering snapshot, independent of Intel and the official vLLM releases.
+**The target checkpoint does not need to include MTP layers for this DFlash2 setup.** DFlash2 uses a separate FP16 draft model. The existing service alias `qwen3.8-27b-fp8-mtp` is retained in the examples and benchmark records; its `-mtp` suffix does not imply that MTP layers are required.
+
+This is a community engineering snapshot, independent of Intel and the official vLLM releases.
 
 ## Benchmarks
 
@@ -68,7 +70,7 @@ The configured per-request context limit is **262,144 tokens**, including prompt
 
 ## What is optimized
 
-- **Stochastic speculative decoding.** Local DFlash2/MTP paths retain temperature, top-p, and top-k sampling. Gains depend on draft acceptance and workload content.
+- **Stochastic speculative decoding.** A separate DFlash2 FP16 draft model proposes candidates for the Qwen3.8-27B FP8 target, retaining temperature, top-p, and top-k sampling. Target-side MTP layers are optional. Gains depend on draft acceptance and workload content.
 - **Long-context attention.** Verification tokens share a historical KV prefix; dense attention reads the context together. A contiguous KV mirror avoids gathering the entire cache every decode round for a single long request.
 - **Prefill and prefix reuse.** Chunked prefill uses finer context buckets and batched attention slices. Prefix caching combines vLLM attention KV reuse with device-side GDN state snapshots.
 - **Host/device overlap.** Lookahead submission, device-side draft preparation, vectorized indices, and compiled regions reduce host preparation and submission gaps.
@@ -89,7 +91,8 @@ Implementation details and before/after measurements are in the [optimization lo
 | Gaudi software | **SDK 1.24.1**, matching driver/firmware, `hl-smi`, `tpc-clang`, and graph headers |
 | PyTorch | Intel's SDK 1.24.1 build: `torch 2.11.0a0`, `habana-torch-plugin 1.24.1.482` |
 | Build tools | `cmake`, `g++`, `objcopy`, `libtcmalloc.so.4` |
-| Checkpoints | Local Qwen3.8-27B FP8 weights with MTP layers and the matching DFlash2 draft model |
+| Target checkpoint | **Qwen3.8-27B FP8**; MTP layers are **not required** for the DFlash2 path |
+| Draft checkpoint | Matching **DFlash2 FP16** model, loaded separately |
 
 Install the matching Gaudi driver and Intel PyTorch packages first; see the [installation guide](docs/INSTALL.md). Model weights and compiled libraries are not included.
 

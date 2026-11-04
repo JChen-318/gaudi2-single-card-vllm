@@ -63,8 +63,8 @@ scripts/build_native.sh        # MAX_JOBS=2 可以降低编译时的内存占用
 
 | 用途 | 实测使用 |
 |---|---|
-| 目标模型 | Qwen3.8-27B 的 FP8 量化（block 128×128，E4M3），保留 MTP 层权重（`model-mtp.safetensors`），约 27 GB |
-| 草稿模型 | 对应 Qwen3.8-27B 的 DFlash2 草稿模型，约 3.4 GB |
+| 目标模型 | Qwen3.8-27B 的 FP8 量化（block 128×128，E4M3），约 27 GB；DFlash2 路径不要求包含 MTP 层权重 |
+| 草稿模型 | 对应 Qwen3.8-27B 的独立 DFlash2 FP16 草稿模型，约 3.4 GB |
 
 把两个目录的路径填到 `config/serve.env` 的 `TARGET_MODEL` 和 `DRAFT_MODEL`。服务以离线模式运行（`HF_HUB_OFFLINE=1`），不会联网下载。
 

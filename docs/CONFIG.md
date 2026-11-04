@@ -4,8 +4,8 @@
 
 | 项 | 默认 | 说明 |
 |---|---|---|
-| `TARGET_MODEL` / `DRAFT_MODEL` | — | 目标模型与 DFlash2 草稿模型的目录（必填） |
-| `SERVED_MODEL_NAME` | `qwen3.8-27b-fp8-mtp` | 请求里 `model` 字段用的名字 |
+| `TARGET_MODEL` / `DRAFT_MODEL` | — | Qwen3.8-27B FP8 目标模型与 DFlash2 FP16 草稿模型的目录（必填）；目标模型不要求包含 MTP 层 |
+| `SERVED_MODEL_NAME` | `qwen3.8-27b-fp8-mtp` | 请求里 `model` 字段用的名字；`-mtp` 后缀不表示目标模型必须包含 MTP 层 |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | 监听地址。`0.0.0.0` 会对外开放，请配合 `API_KEY` 和防火墙 |
 | `API_KEY` | 空 | 设置后 `/v1/*` 需要 `Authorization: Bearer <key>`；`scripts/smoke_test.sh`、`bench.sh` 会自动带上 |
 | `MAX_MODEL_LEN` | 262144 | 单个请求的最大上下文（提示词 + 生成） |

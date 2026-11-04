@@ -44,13 +44,13 @@ def save(name, parts):
 
 def inference_path():
     parts = begin(320, "Single-card speculative inference",
-                  "The DFlash2 path drafts candidate tokens, verifies them with the FP8 target model, "
-                  "and uses stochastic sampling to continue generation on a single Intel Gaudi2.")
+                  "A separate DFlash2 FP16 model drafts candidate tokens for the Qwen3.8-27B FP8 target, "
+                  "which does not require MTP layers. Stochastic sampling continues generation on one Intel Gaudi2.")
     parts += [text(56, 48, "INTEL GAUDI2 / 96 GiB HBM", 20, BLUE, 600),
               text(1144, 48, "27B FP8", 20, MUTED, anchor="end"),
               text(56, 112, "Speculative decoding, one card.", 54, weight=650),
-              text(56, 151, "DFlash2 path · shared KV prefixes · non-greedy sampling", 25, MUTED)]
-    for x, label, sub in [(56, "Draft candidates", "DFlash2 draft model"),
+              text(56, 151, "Qwen3.8-27B FP8 target · DFlash2 FP16 draft", 25, MUTED)]
+    for x, label, sub in [(56, "Draft candidates", "DFlash2 FP16 model"),
                           (448, "Verify with target", "FP8 attention + GDN"),
                           (840, "Sample & continue", "Stochastic output")]:
         parts += [line(x, 191, x + 304, 191, BLUE, 2),

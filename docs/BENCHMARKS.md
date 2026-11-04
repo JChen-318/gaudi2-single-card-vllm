@@ -18,7 +18,7 @@ This report transcribes the user-supplied performance screenshot for `qwen3.8-27
 | Sampling, output length, warm-up/cache state, and draft checkpoint | Not shown |
 | Driver, SDK, OS, and hardware telemetry | Not shown in the screenshot |
 
-The repository targets a single Intel Gaudi2 HL-225 (96 GiB HBM), Ubuntu 24.04, Python 3.12, and SDK 1.24.1. Those are the documented project environment, not independently verified metadata for this screenshot. The service alias does not identify whether the run used DFlash2, MTP, or a particular checkpoint revision. Do not merge these figures with the earlier version-specific experiments in the [optimization log](OPTIMIZATION.md).
+The documented serving configuration pairs a **Qwen3.8-27B FP8 target** with a separate **DFlash2 FP16 draft model**; target-side MTP layers are not required. The `-mtp` suffix in the recorded service alias is a name, not a checkpoint requirement. The repository targets a single Intel Gaudi2 HL-225 (96 GiB HBM), Ubuntu 24.04, Python 3.12, and SDK 1.24.1. These are the documented project configuration and environment; the screenshot alone does not establish exact checkpoint revisions or independently verify those environment details. Do not merge these figures with the earlier version-specific experiments in the [optimization log](OPTIMIZATION.md).
 
 **Evidence:** [Original report image](benchmarks/source-report.png) · [Detailed data](benchmarks/workload-details.csv) · [Summary data](benchmarks/workload-summary.csv)
 
