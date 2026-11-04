@@ -2,194 +2,242 @@
 
 # Gaudi2 Single-Card vLLM
 
-**面向单张 Intel Gaudi2 的大模型推理适配与优化**
+**27B FP8 inference on one Intel Gaudi2, with non-greedy speculative decoding.**
 
-FP8 · 非 greedy 投机解码 · 长上下文 · OpenAI 兼容接口
+[![Hardware: Intel Gaudi2](https://img.shields.io/badge/Intel_Gaudi2-96_GiB_HBM-0071C5?style=flat-square)](#quick-start)
+[![Gaudi SDK: 1.24.1](https://img.shields.io/badge/Gaudi_SDK-1.24.1-4B5563?style=flat-square)](#requirements)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-3FB950?style=flat-square)](LICENSE)
 
-![Gaudi2](https://img.shields.io/badge/Intel%20Gaudi2-single%20card-0071c5)
-![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f)
-
-[项目特点](#项目特点) · [性能概览](#性能概览) · [快速开始](#快速开始) · [配置与运维](#配置与运维) · [文档](#文档)
+[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [API](#api) · [Documentation](#documentation) · [Limitations](#limitations)
 
 </div>
 
-把 vLLM、Gaudi 硬件插件和本地算子整合成一套单卡推理工程，让一张拥有 96 GiB HBM 的 Gaudi2 运行 27B 级模型，并改善日常对话、代码生成和长文本处理的体验。
+<p align="center">
+  <img src="docs/assets/inference-path.svg" width="100%" alt="Single-card inference: DFlash2 drafts candidates, the FP8 target model verifies them, and stochastic sampling produces the output.">
+</p>
 
-项目重点围绕 **Qwen3.8 的 27B FP8 模型**，提供 DFlash2 和 MTP 的本地适配，保留随机采样，并针对单卡环境优化解码链路。仓库包含完整源码、一键安装与启动脚本、离线验证和测速工具：在同样的 Gaudi 软件环境下，按「快速开始」几条命令即可部署。
+A source snapshot combining vLLM, the Gaudi hardware plugin, and native kernels for **Qwen3.8-27B FP8** on a single **96 GiB Gaudi2**. It includes local DFlash2/MTP adaptations, installation and serving scripts, CPU-side validation, and performance tools.
 
-## 项目特点
+The model name is the local checkpoint/service alias used by this project; its implementation uses the Qwen3.5 architecture. This is a community engineering snapshot, independent of Intel and the official vLLM releases.
 
-- **单卡 FP8 推理**：针对 Gaudi2 的权重布局、混合注意力和 GDN 状态管理进行适配。
-- **非 greedy 投机解码**：支持本地 DFlash2/MTP 路径，保留 temperature、top-p、top-k 采样，不以切换 greedy 换取速度。
-- **长上下文优化**：验证 token 共用历史 KV 前缀，KV 每轮只读一次；全注意力对整段上下文做一次 softmax，不再逐页拆分合并；单个长请求 decode 时每层保留一份连续的 KV 副本，每轮只补拷最新的一两页，不再每轮整段 gather（18 万 token 每轮 40.9 → 35 ms）；扩展解码分桶覆盖范围。
-- **图片输入**：模型自带的视觉编码器在投机解码路径上可用，每张图补齐到 7 个固定尺寸之一，预热时全部编译，新尺寸的图片不再现编译（原生分辨率时首次遇到一种尺寸要多等 10–55 秒）。
-- **前缀缓存**：重复发送同一段开头的请求（多轮对话、智能体反复提交历史）直接复用已算好的部分。注意力 KV 走 vLLM 的前缀缓存，GDN 递推状态在固定位置存设备快照，decode 用的紧凑状态布局不变。9.5 万 token 对话的续写轮首 token 从 26.7 秒降到 0.9 秒。
-- **更快的长 prefill**：长提示词按 2048 token 分段计算，上下文分桶细化到每 8K 一档；每段对已缓存上下文的注意力切成 8K 一片、叠成一个批次一次算完，只有可能含补齐的最后一片带掩码。17.7 万 token 的首 token 从约 115 秒降到 61 秒。
-- **主机与设备流水重叠**：按预测提前提交下一轮主模型和采样，紧接着用设备上的采样结果提交该轮草稿，不等主机读回；下一步核对一致后直接复用，下一轮输入增量生成，两路并发同样适用。
-- **更轻的主机准备**：向量化生成索引和页表，编译区域独立代码对象、草稿模型整体编译，减少缓存查找与零散提交。
-- **更少的设备时间**：采样和草稿候选不再对整个词表排序，词表投影使用 FP8，GDN 检查点直接写入状态池；重写的 [GDN 递推 TPC kernel](native/gdn-fused-kernel/) 把准备步骤并入 kernel，跨通道归约共用一棵归约树。
-- **FP8 KV 缓存**：29 GiB 放下约 52.8 万 token（两个 256K 请求），长上下文每轮更快。KV 镜像另占 8 GiB（覆盖 26 万 token）。
-- **专用采样扩展**：提供 HPU 随机拒绝纠正与输出打包源码，衔接投机验证后的生成流程。
-- **编译结果缓存与更短的预热**：单文件 TPC 内核库转接层让多个内核库可以配合 `PT_HPU_RECIPE_CACHE_CONFIG` 使用；预热不再在每个分桶前后强制 gc，从 48 分钟缩短到 23 分钟。
-- **熟悉的服务接口**：沿用 vLLM 的 OpenAI 兼容接口，提供工具调用配置示例。
+## Benchmarks
 
-## 性能概览
+### Six workloads, nine prompt lengths
 
-以下为本地单张 Gaudi2、27B FP8 目标模型搭配 DFlash2 草稿模型的实测（当前配置，即 `scripts/serve.sh` 的设置；短提示词各项为 v14 测得，长上下文各行的 decode 为 v17、首 token 为 v16 测得）。使用非 greedy 采样（`temperature=1.0, top_p=0.95, top_k=20`），关闭 thinking，每条生成 512 token；短提示词每类跑 3 次取中位数。
+The supplied report covers **6 workloads × 9 prompt lengths**, from **512 to 131,072 tokens**, through an OpenAI-compatible endpoint serving `qwen3.8-27b-fp8-mtp`. All **54 measurements** show **1/1 requests successful** at concurrency **1**.
 
-| 场景 | 解码吞吐 |
-|---|---:|
-| 单路中英文解释、议论文、科普 | 80–116 token/s |
-| 单路代码生成（Python / Go / TypeScript） | 164–196 token/s |
-| 单路结构化输出（JSON 抽取）、大段复述 | 273–294 token/s |
-| 单路中文散文创作 | 53 token/s |
-| 两路并发（代码与推理），合计 | 243–312 token/s |
-| 单路约 5.5 万 token 上下文 | 96 token/s（首 token 14.2 s） |
-| 单路约 9.5 万 token 上下文 | 85 token/s（首 token 26.7 s） |
-| 单路约 18 万 token 上下文 | 82 token/s（首 token 59.7 s） |
-| 多轮续写（命中前缀缓存，5.7 万 / 9.5 万 token） | 首 token 0.9 s（不命中时 14.5 / 26.7 s） |
+<p align="center">
+  <img src="docs/assets/workload-throughput.svg" width="100%" alt="Reported workload averages: steady decode ranges from 112.96 tokens/s for Math and Logic to 145.61 tokens/s for Technical Doc QA; end-to-end throughput ranges from 43.52 to 53.02 tokens/s.">
+</p>
 
-每轮验证（8 个 token）的耗时：单路短上下文 26.2 ms，两路并发 29.9 ms，5.5 万 token 上下文 29.2 ms，9.5 万 token 31.5 ms，18 万 token 33.7 ms（v17 的 KV 镜像，此前 30.7 / 33.2 / 40.9 ms；v15 把长上下文的全注意力改为整段计算，再之前 9.5 万为 40.7 ms）。首 token 时间在 v16 之前：9.5 万 token 37.7 秒，17.7 万约 115 秒。各版本的单路每轮耗时：v5 42.3 ms，v10 30.5 ms，v11 27.6 ms，v14 26.2 ms。
+| Workload | Steady decode (tokens/s) | vs. General | End-to-end (tokens/s) | Reported TTFT* (ms) |
+|:---|---:|---:|---:|---:|
+| General / Essay | 121.78 | Baseline | 51.98 | 8,339.7 |
+| Code Decode | 129.98 | +6.7% | 47.55 | 8,327.2 |
+| Structured JSON | 121.39 | −0.3% | 48.45 | 8,332.9 |
+| Prose & QA | 123.99 | +1.8% | 49.94 | 9,583.5 |
+| **Technical Doc QA** | **145.61** | **+19.6%** | **53.02** | 9,370.4 |
+| Math & Logic | 112.96 | −7.2% | 43.52 | 8,372.4 |
 
-速度主要取决于每轮能接受几个草稿 token：代码和结构化输出每轮可接受 3.4–6.9 个，自然语言约 1.1–2.4 个，中文散文只有约 0.4 个。完整测试条件、逐项拆分和前后对照见 [优化说明](docs/OPTIMIZATION.md)。
+Technical Doc QA has the highest reported workload-average decode throughput, **1.29×** the lowest workload average. Peak per-row prefill is **4,674.88 tokens/s**, at a 16,384-token prompt in Prose & QA.
 
-这些数字采用流式 decode 口径，不是整请求吞吐；任务、草稿接受率和硬件环境都会影响结果。**上下文配置上限为单请求 262,144 token（FP8 KV 缓存可同时容纳两个），当前最长实测约 9.5 万 token**，不把外推结果当成实测成绩。
+*Source: the [supplied screenshot](docs/benchmarks/source-report.png), transcribed without rerunning the model. The summary labels TTFT as “P50,” but its aggregation method is unavailable. The figures are close to the means across the nine prompt-length rows; treat them as reported aggregates, not verified request-level percentiles. The screenshot does not establish sampling settings, output lengths, draft-model identity, or software revision. “Structured JSON” is the report's workload label; it does not establish constrained-decoding support.*
 
-## 快速开始
+→ **[Full results, context-length curves, and metric notes](docs/BENCHMARKS.md)** · [54-row data](docs/benchmarks/workload-details.csv) · [Summary data](docs/benchmarks/workload-summary.csv)
 
-### 需要准备
+<details>
+<summary><strong>Earlier engineering measurements — different test protocol</strong></summary>
 
-| 项 | 要求 |
-|---|---|
-| 加速卡 | 1 张 Intel Gaudi2（HL-225，96 GiB HBM） |
-| 主机 | x86-64，内存约 32 GiB 及以上（加载权重时要经过主机内存），模型所在磁盘约 31 GiB |
-| 系统 | Ubuntu 24.04，Python 3.12 |
-| Gaudi 软件 | SDK **1.24.1**：驱动、固件、`hl-smi`、TPC 编译器 `tpc-clang`、`habanalabs-graph` 头文件 |
-| PyTorch | Intel 为 1.24.1 发布的 PyTorch 包（`torch 2.11.0a0`、`habana-torch-plugin 1.24.1.482`） |
-| 构建工具 | `cmake`、`g++`、`objcopy`、`libtcmalloc.so.4` |
-| 模型 | Qwen3.8-27B 的 FP8 权重（含 MTP 层），以及对应的 DFlash2 草稿模型 |
+The original repository reports the following on one Gaudi2 with a 27B FP8 target and DFlash2 draft model. These runs use `temperature=1.0`, `top_p=0.95`, `top_k=20`, thinking disabled, and 512 output tokens. Short-prompt results are medians of three runs from v14; long-context decode is from v17 and TTFT from v16. They are separate from the supplied six-workload report above.
 
-Gaudi 驱动和 PyTorch 的安装见 [安装说明](docs/INSTALL.md)。仓库不包含编译好的库和模型权重，下面的脚本会在本机编译。
+| Scenario | Streaming decode | TTFT |
+|:---|---:|---:|
+| General explanations and essays, one stream | 80–116 tokens/s | — |
+| Python / Go / TypeScript, one stream | 164–196 tokens/s | — |
+| JSON extraction and long repetition, one stream | 273–294 tokens/s | — |
+| Chinese prose, one stream | 53 tokens/s | — |
+| Code and reasoning, two concurrent streams combined | 243–312 tokens/s | — |
+| ~55K-token context, one stream | 96 tokens/s | 14.2 s |
+| ~95K-token context, one stream | 85 tokens/s | 26.7 s |
+| ~180K-token context, one stream | 82 tokens/s | 59.7 s |
+| Prefix-cache hit at ~57K / ~95K tokens | — | 0.9 s |
 
-### 安装与启动
+The configured per-request context limit is **262,144 tokens**, including prompt and output. This is a configuration limit, not a fully validated benchmark claim. See the [optimization log](docs/OPTIMIZATION.md) for version-specific measurements and conditions.
+
+</details>
+
+## What is optimized
+
+- **Stochastic speculative decoding.** Local DFlash2/MTP paths retain temperature, top-p, and top-k sampling. Gains depend on draft acceptance and workload content.
+- **Long-context attention.** Verification tokens share a historical KV prefix; dense attention reads the context together. A contiguous KV mirror avoids gathering the entire cache every decode round for a single long request.
+- **Prefill and prefix reuse.** Chunked prefill uses finer context buckets and batched attention slices. Prefix caching combines vLLM attention KV reuse with device-side GDN state snapshots.
+- **Host/device overlap.** Lookahead submission, device-side draft preparation, vectorized indices, and compiled regions reduce host preparation and submission gaps.
+- **Native kernels and FP8.** Fused GDN recurrence, specialized rejection sampling, faster candidate selection, FP8 vocabulary projection, and FP8 KV storage target device time and memory use.
+- **Image input and recipe caching.** Fixed vision buckets compile during warm-up. A TPC kernel-library shim enables device recipe caching across the native libraries.
+
+Implementation details and before/after measurements are in the [optimization log](docs/OPTIMIZATION.md).
+
+## Quick start
+
+### Requirements
+
+| Component | Tested configuration |
+|:---|:---|
+| Accelerator | **1× Intel Gaudi2 HL-225**, 96 GiB HBM |
+| Host | x86-64, approximately 32 GiB+ RAM; approximately 31 GiB for model files |
+| OS / Python | Ubuntu 24.04 / Python 3.12 |
+| Gaudi software | **SDK 1.24.1**, matching driver/firmware, `hl-smi`, `tpc-clang`, and graph headers |
+| PyTorch | Intel's SDK 1.24.1 build: `torch 2.11.0a0`, `habana-torch-plugin 1.24.1.482` |
+| Build tools | `cmake`, `g++`, `objcopy`, `libtcmalloc.so.4` |
+| Checkpoints | Local Qwen3.8-27B FP8 weights with MTP layers and the matching DFlash2 draft model |
+
+Install the matching Gaudi driver and Intel PyTorch packages first; see the [installation guide](docs/INSTALL.md). Model weights and compiled libraries are not included.
+
+### Install and serve
+
+Run these commands on the Gaudi host:
 
 ```bash
 git clone https://github.com/JChen-318/gaudi2-single-card-vllm.git
 cd gaudi2-single-card-vllm
 
-scripts/check_env.sh                 # 检查驱动、编译器、Python 与 PyTorch 版本（只读，不占用设备）
-scripts/install.sh --venv .venv      # 安装 vllm-core 与 vllm-gaudi（可编辑模式，运行的就是仓库里的源码）
-scripts/build_native.sh              # 编译采样内核、FlashInfer-Gaudi 内核和内核库转接层，约 2 分钟
+scripts/check_env.sh                 # Check the driver, compiler, Python, and PyTorch
+scripts/install.sh --venv .venv      # Install the bundled core and plugin in editable mode
+scripts/build_native.sh             # Build the native kernels and TPC shim
 
 cp config/serve.env.example config/serve.env
-vi config/serve.env                  # 至少填写 TARGET_MODEL 和 DRAFT_MODEL
+vi config/serve.env                  # Set TARGET_MODEL and DRAFT_MODEL
 
-scripts/serve.sh --daemon            # 后台启动，日志在 ~/.cache/gaudi2-single-card-vllm/logs/
-scripts/smoke_test.sh --wait         # 等服务就绪后发几条请求，检查输出和速度
+scripts/serve.sh --daemon
+scripts/smoke_test.sh --wait
 ```
 
-### 用 Docker 运行
+**Allow 30–45 minutes for the first start**, including model loading and graph compilation. Later starts take approximately 25 minutes with cached device recipes. `scripts/serve.sh --skip-warmup` can accept requests in about 6 minutes for a functional check; new shapes still compile on first use, so benchmark after full warm-up.
 
-主机只需装好 Gaudi 驱动 1.24.1 和 Docker。镜像以 Intel 1.24.1 官方 PyTorch 镜像为基础，在镜像里完成上面的安装和编译；主机重启后容器自动启动。
+Logs default to `~/.cache/gaudi2-single-card-vllm/logs/`. Stop the service with `scripts/stop.sh`. Non-root users need an unlimited memlock allowance; the tested root setup uses `sudo scripts/serve.sh --daemon` with an explicit `DATA_DIR` in `serve.env`.
+
+<details>
+<summary><strong>Docker deployment</strong></summary>
+
+The host needs the matching **1.24.1 driver/firmware**, Docker 24+, and the Compose plugin. The image builds on Intel's SDK 1.24.1 PyTorch image and compiles the native libraries inside the container.
 
 ```bash
-cp config/serve.env.example config/serve.env && vi config/serve.env     # 模型路径、DATA_DIR 等
-cp docker/docker.env.example docker/docker.env && vi docker/docker.env   # 上面文件的路径、模型目录、DATA_DIR
+cp config/serve.env.example config/serve.env
+vi config/serve.env                  # Set models, DATA_DIR, and container bind address
+cp docker/docker.env.example docker/docker.env
+vi docker/docker.env                # Set SERVE_ENV, MODEL_ROOT, DATA_DIR, and device paths
+
 docker compose -f docker/compose.yaml --env-file docker/docker.env up -d --build
 scripts/smoke_test.sh --wait
 ```
 
-详见 [Docker 部署](docs/DOCKER.md)。
+Keep the host and container paths consistent. The container uses host networking and `restart: unless-stopped`. See the [Docker guide](docs/DOCKER.md) for device mappings, startup, and updates.
 
-**第一次启动需要 30–45 分钟**：加载模型约 4 分钟，然后预热，把每种形状的计算图编译一遍。设备端的编译结果会缓存到磁盘，之后每次重启约 25 分钟。只想先确认能跑通，可以用 `scripts/serve.sh --skip-warmup`，约 6 分钟就能接受请求，但每种新形状第一次出现时都要现场编译，这种模式不要拿来测速。
+</details>
 
-停止服务：`scripts/stop.sh`。
+## API
 
-服务需要锁定较多主机内存，实测以 root 运行（`sudo scripts/serve.sh --daemon`，此时请在 `serve.env` 里显式设置 `DATA_DIR`）。用普通用户运行时，要把该用户的 memlock 上限设为 unlimited。
-
-### 调用
-
-服务提供 OpenAI 兼容接口，默认只监听本机 `127.0.0.1:8000`。
+The OpenAI-compatible endpoint listens on **`http://127.0.0.1:8000/v1`** by default.
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "qwen3.8-27b-fp8-mtp",
-  "messages": [{"role": "user", "content": "用 Python 写一个快速排序"}],
-  "max_tokens": 1024,
-  "chat_template_kwargs": {"enable_thinking": false}
-}'
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3.8-27b-fp8-mtp",
+    "messages": [{"role": "user", "content": "Write a quicksort implementation in Python."}],
+    "max_tokens": 1024,
+    "chat_template_kwargs": {"enable_thinking": false}
+  }'
 ```
+
+With the OpenAI Python client installed (`pip install openai`):
 
 ```python
 from openai import OpenAI
+
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="EMPTY")
-r = client.chat.completions.create(model="qwen3.8-27b-fp8-mtp",
-                                   messages=[{"role": "user", "content": "你好"}], max_tokens=256)
-print(r.choices[0].message.content)
+response = client.chat.completions.create(
+    model="qwen3.8-27b-fp8-mtp",
+    messages=[{"role": "user", "content": "Explain speculative decoding."}],
+    max_tokens=256,
+    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+)
+print(response.choices[0].message.content)
 ```
 
-- 默认采样参数 `temperature=1.0, top_p=0.95, top_k=20`，请求里可以覆盖。思考模式由 `chat_template_kwargs.enable_thinking` 控制。
-- 支持图片输入（OpenAI 格式的 `image_url`，URL 或 base64），每个请求最多 4 张，自动缩放到约 100 万像素以内；不支持视频和音频。示例：`"content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}, {"type": "text", "text": "图里写了什么？"}]`。`config/serve.env` 里 `VISION=0` 可关闭。
-- 支持流式输出和工具调用，`tool_choice` 只能是 `"auto"`。投机解码路径不支持以下请求，服务会直接返回错误：强制工具调用、结构化输出（`response_format` / guided decoding）、各类惩罚、`min_p` / `min_tokens`、`logit_bias`、`logprobs`、思考预算。
-- 对外提供服务时，在 `config/serve.env` 里设置 `API_KEY`，`HOST` 改为 `0.0.0.0`，并放在防火墙或反向代理之后。
+Defaults are `temperature=1.0`, `top_p=0.95`, and `top_k=20`; requests can override them. Thinking is controlled by `chat_template_kwargs.enable_thinking`.
 
-### 测速
+| Capability | Current behavior |
+|:---|:---|
+| Streaming | Supported |
+| Image input | OpenAI `image_url` parts, URL or base64; up to 4 images/request, resized to approximately 1 megapixel each; disable with `VISION=0` |
+| Tool calling | `tool_choice="auto"`; forced tool selection is rejected |
+| Structured-output API | `response_format` / guided decoding are rejected on the speculative path |
+| Other rejected options | Penalties, `min_p`, `min_tokens`, `logit_bias`, `logprobs`, and thinking budgets |
+| Video / audio | Unsupported |
+
+For remote access, set `API_KEY`, bind `HOST=0.0.0.0`, and use a firewall or reverse proxy.
+
+## Configuration and validation
+
+Edit **[`config/serve.env`](config/serve.env.example)** for model paths, the endpoint, context length, concurrency, cache size, and CPU affinity. Defaults include `MAX_MODEL_LEN=262144`, `MAX_NUM_SEQS=2`, and a **29 GiB FP8 KV cache**. The decode KV mirror uses an additional 8 GiB; prefix-state snapshots also consume device memory.
+
+`DATA_DIR` holds logs, runtime controls, and compile caches. Cache paths include native-library hashes, so rebuilding kernels selects a fresh cache. After source updates, rerun installation if dependencies changed, rebuild native libraries if their sources changed, and restart. See the [configuration guide](docs/CONFIG.md) for tuning flags and systemd setup.
 
 ```bash
-scripts/bench.sh          # 单路 3 条、两路并发、约 3 万 token 上下文，约 5 分钟
-scripts/bench.sh --full   # 再加 15 类提示词逐条测速
+scripts/bench.sh          # Single-stream, two-stream, and ~30K-context checks
+scripts/bench.sh --full   # Also run the 15-category prompt suite
 ```
 
-速度主要取决于每轮能接受几个草稿 token，所以会随提示词内容和随机采样变化。
+These scripts are the repository's own checks; they do not reproduce the supplied screenshot's external six-workload protocol. See [CPU-side validation](validation/README.md) and [benchmark/trace tools](tools/README.md) for more diagnostics.
 
-## 配置与运维
+## Documentation
 
-- 所有设置都在 `config/serve.env` 里：模型路径、监听地址、API key、上下文长度、并发数、KV 缓存大小、绑核。调优用的开关都写在 `scripts/serve.sh` 中，每个开关的含义见 [配置说明](docs/CONFIG.md)。
-- 缓存、日志和运行期控制文件放在 `DATA_DIR`（默认 `~/.cache/gaudi2-single-card-vllm`）。设备端编译缓存的目录名里带着各内核库的哈希，重新编译内核库后会自动换用新的缓存目录，旧目录可以手动删除。
-- 更新代码后重新运行 `scripts/install.sh`（依赖有变化时）和 `scripts/build_native.sh`（`native/` 或 `vllm-gaudi/csrc/` 有变化时），然后重启服务。
-- 以 systemd 服务运行、调整并发数或上下文长度，见 [配置说明](docs/CONFIG.md)。
+The README and the new benchmark report are in English. Existing detailed engineering guides are in Chinese.
 
-## 仓库结构
+| Guide | Contents |
+|:---|:---|
+| [Benchmark report](docs/BENCHMARKS.md) | All 54 measurements, charts, source image, and metric definitions |
+| [Installation](docs/INSTALL.md) | Gaudi driver, Intel PyTorch, dependencies, and troubleshooting |
+| [Configuration](docs/CONFIG.md) | Service settings, optimization switches, concurrency, and systemd |
+| [Optimization log](docs/OPTIMIZATION.md) | Bottleneck analysis, implementation changes, and historical results |
+| [Docker](docs/DOCKER.md) | Building, deployment, restart behavior, and operations |
+| [Validation](validation/README.md) / [Tools](tools/README.md) | Offline checks, benchmarking, and trace analysis |
+| [Source provenance](docs/SNAPSHOT.md) | Component origins and snapshot verification |
+
+<details>
+<summary><strong>Repository map</strong></summary>
 
 ```text
-scripts/             安装、编译、启动、停止、冒烟测试、测速脚本
-config/              服务配置模板 serve.env.example
-docker/              Dockerfile、compose 配置与容器入口脚本
-requirements/        与实测环境一致的 Python 依赖版本
-vllm-core/           配套 vLLM 主程序
-vllm-gaudi/          Gaudi 插件、FlashInfer-Gaudi（Python 包与 C++/TPC 源码）与设备算子
-native/mtp-sampling/ 随机拒绝采样的 TPC 内核与 PyTorch 算子
-native/tpc-kernel-shim/ 单文件 TPC 内核库转接层（让编译缓存能同时加载多个内核库）
-native/gdn-fused-kernel/ 融合 GDN 递推 kernel 的说明、模拟器测试与真机校验脚本
-validation/          离线验证（CPU 上运行）
-tools/               测速和 trace 分析工具
-examples/            历史版本的独立启动脚本，作对照用
-docs/                安装、配置、优化记录与源码来源说明
+scripts/                  Install, build, serve, smoke-test, and benchmark entry points
+config/                   Service configuration template
+docker/                   Dockerfile, Compose configuration, and entrypoint
+requirements/             Dependency versions for the tested SDK
+vllm-core/                Bundled vLLM core source
+vllm-gaudi/               Gaudi plugin and FlashInfer-Gaudi Python/C++/TPC sources
+native/mtp-sampling/      Stochastic rejection sampling kernels and PyTorch operator
+native/tpc-kernel-shim/   Multi-library shim for device recipe caching
+native/gdn-fused-kernel/  Fused GDN kernel, simulator, and device verification
+validation/               CPU-side validation
+tools/                    Benchmarks and trace analysis
+examples/                 Historical standalone launchers
+docs/                     Guides, benchmark data, and source provenance
 ```
 
-## 文档
+</details>
 
-- [安装说明](docs/INSTALL.md)：Gaudi 驱动与 PyTorch、依赖、常见安装问题。
-- [配置说明](docs/CONFIG.md)：`serve.env` 各项、`serve.sh` 中每个调优开关、systemd、改并发与上下文。
-- [优化说明与实测](docs/OPTIMIZATION.md)：具体改动、效果和仍待验证的方向。
-- [Docker 部署](docs/DOCKER.md)：镜像构建、开机自启动和运维。
-- [离线验证](validation/README.md)：测试范围与运行方法。
-- [测速与分析工具](tools/README.md)：性能测量和诊断入口。
-- [源码来源说明](docs/SNAPSHOT.md)：各组件来源与文件校验方式。
+## Limitations
 
-## 已知限制
+- **Scope.** Tuned for one Gaudi2 and one or two concurrent requests. Higher concurrency and other model/draft combinations need independent validation.
+- **Long-context latency.** Uncached prompts can take tens of seconds to reach the first token. In the supplied report, TTFT at 131,072 tokens ranges from **41.51 to 48.37 seconds**. Long prefill can also slow another request's decode to a few tokens/s.
+- **Occasional recompilation.** Simultaneous short requests can trigger 90–100-second Dynamo recompilations. Startup priming and recompilation logs help diagnose this unresolved issue.
+- **Prefix-cache boundaries.** GDN snapshots are saved every 16,384 tokens and at the last 2,048-token boundary before each prompt ends; at most 16 snapshots are retained. Changed conversation history can reduce reuse.
+- **Quality evaluation.** FP8 KV storage is uncalibrated and lacks a systematic quality evaluation. The historical FP8 vocabulary-projection check reports 98.4% top-1 agreement with BF16.
+- **Workload dependence.** Draft acceptance varies with content; prose can gain less than code or repetitive structured text. A successful benchmark request establishes execution, not answer quality or constrained-output correctness.
+- **Acceptance coverage.** Tool calling, cancellation/preemption, and contexts above 100K tokens need broader validation. The supplied 131,072-token measurements and earlier ~180K runs do not establish full 262,144-token coverage.
 
-- 只针对单卡、一到两路并发调优和实测。`MAX_NUM_SEQS` 调大可以运行，但预热分桶和速度都没有验证。
-- 不命中缓存时，长提示词的首 token 仍要几十秒（9.5 万 token 26.7 秒，17.7 万 61 秒）。两路并发时，一路在做长 prefill，另一路的 decode 会降到每秒几个 token（每步先算完对方一个 2048 token 的段）。
-- 两路随机采样的短请求同时到达时，偶尔会卡 90–100 秒（Dynamo 重新编译 7 个大图），原因还没定位。`serve.sh` 已打开重新编译日志（`TORCH_LOGS=recompiles`），并在启动后用 `tools/prime.py` 发几组真实请求，让首次遇到的形状在启动阶段编译。
-- 前缀缓存的 GDN 快照只在每 1.6 万 token 处和每个提示词末尾前的最后一个 2048 边界处保存，最多 16 份（每份约 155 MB，按最近使用淘汰）。新请求能接上的位置受这两点限制；对话历史在前面被改写（例如客户端删掉了之前轮次的思考内容）时，只能退回到更早的快照。
-- FP8 KV 缓存没有做校准，接受率、抽样输出和 7.4 万 token 的检索测试正常，但没有做系统的质量评测。FP8 词表投影与 BF16 的 top-1 一致率 98.4%。
-- 只用上文这两个模型测试过。其他 Qwen3.5 架构的模型或草稿模型需要自行验证。
-- 投机解码的收益取决于内容：代码和结构化文本提速明显，中文散文类创作接受率较低。
-- 工具调用、取消/抢占和 10 万 token 以上的上下文还需要更多验收。
+## Provenance and license
 
-## 来源与许可
+Built on the 1Cat-vLLM-Gaudi engineering branch, the [vLLM Gaudi plugin](https://github.com/vllm-project/vllm-gaudi), and [vLLM](https://github.com/vllm-project/vllm). Existing FP8, normalization, positional encoding, and some GDN functionality are inherited; this snapshot adds single-card adaptations and optimizations.
 
-基于 1Cat-vLLM-Gaudi 工程分支、[vLLM Gaudi 插件](https://github.com/vllm-project/vllm-gaudi) 和 [vLLM](https://github.com/vllm-project/vllm)，不是 Intel 或 vLLM 的官方发行版。基础 FP8、归一化、位置编码及部分 GDN 能力沿用原有实现，本项目在其上进行单卡适配与优化。
-
-主体采用 [Apache-2.0](LICENSE)，第三方组件保留各自许可。部分适配、测试和文档使用了 AI 辅助，仍需人工审查与目标环境验证。
+The main project uses [Apache-2.0](LICENSE); third-party components retain their own licenses. Some adaptations, tests, and documentation used AI assistance and still require human review and validation on the target environment.

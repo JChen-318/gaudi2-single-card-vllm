@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Decode throughput by prompt length</title>
+  <desc id="desc">Six workloads across 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, and 131072 prompt tokens. The horizontal axis is logarithmic base two. Exact measurements are available in docs/BENCHMARKS.md and the source CSV.</desc>
+  <rect width="1200" height="760" rx="16" fill="#0d1117"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="56.0" y="54.0" font-size="38" fill="#f0f6fc" font-weight="650" text-anchor="start">Decode throughput by prompt length</text>
+    <text x="56.0" y="91.0" font-size="23" fill="#a5b4c5" font-weight="400" text-anchor="start">tokens/s · concurrency 1 · prompt length doubles at each step</text>
+    <line x1="56.0" y1="122.0" x2="81.0" y2="122.0" stroke="#60a5fa" stroke-width="4" />
+    <text x="94.0" y="128.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">General / Essay</text>
+    <line x1="426.0" y1="122.0" x2="451.0" y2="122.0" stroke="#a3cf80" stroke-width="4" />
+    <text x="464.0" y="128.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Code Decode</text>
+    <line x1="796.0" y1="122.0" x2="821.0" y2="122.0" stroke="#edc76e" stroke-width="4" />
+    <text x="834.0" y="128.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Structured JSON</text>
+    <line x1="56.0" y1="158.0" x2="81.0" y2="158.0" stroke="#df9c65" stroke-width="4" />
+    <text x="94.0" y="164.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Prose &amp; QA</text>
+    <line x1="426.0" y1="158.0" x2="451.0" y2="158.0" stroke="#cd8dea" stroke-width="4" />
+    <text x="464.0" y="164.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Technical Doc QA</text>
+    <line x1="796.0" y1="158.0" x2="821.0" y2="158.0" stroke="#f17889" stroke-width="4" />
+    <text x="834.0" y="164.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Math &amp; Logic</text>
+    <line x1="120.0" y1="640.0" x2="1124.0" y2="640.0" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="647.0" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">0</text>
+    <line x1="120.0" y1="554.4" x2="1124.0" y2="554.4" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="561.4" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">50</text>
+    <line x1="120.0" y1="468.8" x2="1124.0" y2="468.8" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="475.8" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">100</text>
+    <line x1="120.0" y1="383.2" x2="1124.0" y2="383.2" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="390.2" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">150</text>
+    <line x1="120.0" y1="297.6" x2="1124.0" y2="297.6" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="304.6" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">200</text>
+    <line x1="120.0" y1="212.0" x2="1124.0" y2="212.0" stroke="#303b4a" stroke-width="1" />
+    <text x="102.0" y="219.0" font-size="21" fill="#a5b4c5" font-weight="400" text-anchor="end">250</text>
+    <line x1="120.0" y1="212.0" x2="120.0" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="120.0" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">512</text>
+    <line x1="245.5" y1="212.0" x2="245.5" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="245.5" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">1K</text>
+    <line x1="371.0" y1="212.0" x2="371.0" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="371.0" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">2K</text>
+    <line x1="496.5" y1="212.0" x2="496.5" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="496.5" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">4K</text>
+    <line x1="622.0" y1="212.0" x2="622.0" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="622.0" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">8K</text>
+    <line x1="747.5" y1="212.0" x2="747.5" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="747.5" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">16K</text>
+    <line x1="873.0" y1="212.0" x2="873.0" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="873.0" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">32K</text>
+    <line x1="998.5" y1="212.0" x2="998.5" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="998.5" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">64K</text>
+    <line x1="1124.0" y1="212.0" x2="1124.0" y2="640.0" stroke="#303b4a" stroke-width="1" stroke-dasharray="3 7"/>
+    <text x="1124.0" y="675.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">128K</text>
+    <path d="M 120.00 304.60 L 245.50 296.06 L 371.00 494.17 L 496.50 500.28 L 622.00 431.07 L 747.50 517.06 L 873.00 459.52 L 998.50 423.41 L 1124.00 457.36" fill="none" stroke="#60a5fa" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="304.60" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="296.06" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="494.17" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="500.28" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="431.07" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="517.06" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="459.52" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="423.41" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="457.36" r="4.5" fill="#60a5fa" stroke="#0d1117" stroke-width="1.5"/>
+    <path d="M 120.00 414.87 L 245.50 440.88 L 371.00 410.83 L 496.50 400.23 L 622.00 393.49 L 747.50 424.68 L 873.00 431.96 L 998.50 448.32 L 1124.00 391.95" fill="none" stroke="#a3cf80" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="414.87" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="440.88" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="410.83" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="400.23" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="393.49" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="424.68" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="431.96" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="448.32" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="391.95" r="4.5" fill="#a3cf80" stroke="#0d1117" stroke-width="1.5"/>
+    <path d="M 120.00 332.59 L 245.50 428.16 L 371.00 432.73 L 496.50 435.88 L 622.00 515.73 L 747.50 424.12 L 873.00 433.64 L 998.50 438.77 L 1124.00 448.08" fill="none" stroke="#edc76e" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="332.59" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="428.16" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="432.73" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="435.88" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="515.73" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="424.12" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="433.64" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="438.77" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="448.08" r="4.5" fill="#edc76e" stroke="#0d1117" stroke-width="1.5"/>
+    <path d="M 120.00 359.61 L 245.50 390.36 L 371.00 359.03 L 496.50 442.59 L 622.00 447.14 L 747.50 364.71 L 873.00 507.01 L 998.50 454.47 L 1124.00 524.58" fill="none" stroke="#df9c65" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="359.61" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="390.36" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="359.03" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="442.59" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="447.14" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="364.71" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="507.01" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="454.47" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="524.58" r="4.5" fill="#df9c65" stroke="#0d1117" stroke-width="1.5"/>
+    <path d="M 120.00 261.96 L 245.50 372.95 L 371.00 485.54 L 496.50 353.89 L 622.00 434.63 L 747.50 347.16 L 873.00 388.63 L 998.50 411.62 L 1124.00 460.07" fill="none" stroke="#cd8dea" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="261.96" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="372.95" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="485.54" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="353.89" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="434.63" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="347.16" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="388.63" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="411.62" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="460.07" r="4.5" fill="#cd8dea" stroke="#0d1117" stroke-width="1.5"/>
+    <path d="M 120.00 387.98 L 245.50 444.59 L 371.00 528.45 L 496.50 413.45 L 622.00 525.02 L 747.50 408.57 L 873.00 453.82 L 998.50 399.87 L 1124.00 457.79" fill="none" stroke="#f17889" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="120.00" cy="387.98" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="245.50" cy="444.59" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="371.00" cy="528.45" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="496.50" cy="413.45" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="622.00" cy="525.02" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="747.50" cy="408.57" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="873.00" cy="453.82" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="998.50" cy="399.87" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <circle cx="1124.00" cy="457.79" r="4.5" fill="#f17889" stroke="#0d1117" stroke-width="1.5"/>
+    <text x="622.0" y="714.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="middle">Prompt tokens (log₂ scale; 1K = 1,024)</text>
+    <text x="56.0" y="746.0" font-size="18" fill="#a5b4c5" font-weight="400" text-anchor="start">Source: supplied report · exact values in docs/BENCHMARKS.md</text>
+  </g>
+</svg>

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Single-card speculative inference</title>
+  <desc id="desc">The DFlash2 path drafts candidate tokens, verifies them with the FP8 target model, and uses stochastic sampling to continue generation on a single Intel Gaudi2.</desc>
+  <rect width="1200" height="320" rx="16" fill="#0d1117"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="56.0" y="48.0" font-size="20" fill="#58a6ff" font-weight="600" text-anchor="start">INTEL GAUDI2 / 96 GiB HBM</text>
+    <text x="1144.0" y="48.0" font-size="20" fill="#a5b4c5" font-weight="400" text-anchor="end">27B FP8</text>
+    <text x="56.0" y="112.0" font-size="54" fill="#f0f6fc" font-weight="650" text-anchor="start">Speculative decoding, one card.</text>
+    <text x="56.0" y="151.0" font-size="25" fill="#a5b4c5" font-weight="400" text-anchor="start">DFlash2 path · shared KV prefixes · non-greedy sampling</text>
+    <line x1="56.0" y1="191.0" x2="360.0" y2="191.0" stroke="#58a6ff" stroke-width="2" />
+    <text x="56.0" y="230.0" font-size="26" fill="#f0f6fc" font-weight="600" text-anchor="start">Draft candidates</text>
+    <text x="56.0" y="267.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">DFlash2 draft model</text>
+    <line x1="448.0" y1="191.0" x2="752.0" y2="191.0" stroke="#58a6ff" stroke-width="2" />
+    <text x="448.0" y="230.0" font-size="26" fill="#f0f6fc" font-weight="600" text-anchor="start">Verify with target</text>
+    <text x="448.0" y="267.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">FP8 attention + GDN</text>
+    <line x1="840.0" y1="191.0" x2="1144.0" y2="191.0" stroke="#58a6ff" stroke-width="2" />
+    <text x="840.0" y="230.0" font-size="26" fill="#f0f6fc" font-weight="600" text-anchor="start">Sample &amp; continue</text>
+    <text x="840.0" y="267.0" font-size="22" fill="#a5b4c5" font-weight="400" text-anchor="start">Stochastic output</text>
+    <line x1="394.0" y1="230.0" x2="416.0" y2="230.0" stroke="#a5b4c5" stroke-width="2" />
+    <path d="M409 223 L416 230 L409 237" fill="none" stroke="#a5b4c5" stroke-width="2"/>
+    <line x1="786.0" y1="230.0" x2="808.0" y2="230.0" stroke="#a5b4c5" stroke-width="2" />
+    <path d="M801 223 L808 230 L801 237" fill="none" stroke="#a5b4c5" stroke-width="2"/>
+  </g>
+</svg>

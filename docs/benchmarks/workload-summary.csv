@@ -1,0 +1,7 @@
+workload,label,reported_steady_decode_tokens_per_s,reported_vs_general_percent,reported_e2e_tokens_per_s,reported_ttft_p50_ms,reported_itl_p50_ms,effective_concurrency
+general,General / Essay,121.78,0.0,51.98,8339.7,28.6,1
+code,Code Decode,129.98,6.7,47.55,8327.2,29.9,1
+json,Structured JSON,121.39,-0.3,48.45,8332.9,29.7,1
+prose,Prose & QA,123.99,1.8,49.94,9583.5,29.4,1
+doc-qa,Technical Doc QA,145.61,19.6,53.02,9370.4,30.6,1
+math,Math & Logic,112.96,-7.2,43.52,8372.4,29.3,1
