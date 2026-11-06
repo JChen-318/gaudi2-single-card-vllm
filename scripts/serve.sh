@@ -56,7 +56,16 @@ for f in "$SAMPLING_KERNELS" "$SAMPLING_OP" "$FI_KERNELS" "$FI_OP" "$SHIM"; do
 done
 
 # Device recipes are cached per set of kernel libraries: a rebuild gets a fresh cache automatically.
-LIBHASH=$(cat "$SAMPLING_KERNELS" "$FI_KERNELS" "$SHIM" /usr/lib/habanalabs/libtpc_kernels.so | sha256sum | cut -c1-12)
+# GDN_TPC=1: the GDN TPC kernels built from vllm-gaudi/csrc/qwen4exp (causal conv for prefill, gated RMSNorm for
+# decode; models/qwen4exp/gdn_h14.py) for this model too (section 22). Their library joins the shim's list and
+# the recipe-cache hash; without the built library the switch is ignored.
+QWEN4EXP_KERNELS=$ROOT/vllm-gaudi/csrc/qwen4exp/build/libqwen4exp_gaudi2_kernels.so
+GDN_TPC_LIBS=; GDN_TPC_ON=0
+if [ "${GDN_TPC:-0}" = 1 ]; then
+  if [ -f "$QWEN4EXP_KERNELS" ]; then GDN_TPC_LIBS="$QWEN4EXP_KERNELS:"; GDN_TPC_ON=1
+  else echo "GDN_TPC=1 but $QWEN4EXP_KERNELS is not built: ignored"; fi
+fi
+LIBHASH=$(cat "$SAMPLING_KERNELS" "$FI_KERNELS" "$SHIM" ${GDN_TPC_LIBS:+"$QWEN4EXP_KERNELS"} /usr/lib/habanalabs/libtpc_kernels.so | sha256sum | cut -c1-12)
 RUN=$DATA_DIR/run; RECIPES=$DATA_DIR/recipe-cache-$LIBHASH
 mkdir -p "$RUN" "$RECIPES" "$DATA_DIR/logs" "$DATA_DIR/habana-logs" "$DATA_DIR/torch-cache"
 # Runtime switches read by the engine (all on = the measured configuration)
@@ -127,7 +136,7 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   ENABLE_SKIP_REMOVAL_OF_GRAPH_INPUT_IDENTITY_NODES=true
   # kernel libraries: one file for the graph compiler, the real list behind it; on-disk recipe cache
   GC_KERNEL_PATH="$SHIM"
-  KIRO_TPC_LIBS="$SAMPLING_KERNELS:$FI_KERNELS:/usr/lib/habanalabs/libtpc_kernels.so"
+  KIRO_TPC_LIBS="$GDN_TPC_LIBS$SAMPLING_KERNELS:$FI_KERNELS:/usr/lib/habanalabs/libtpc_kernels.so"
   PT_HPU_RECIPE_CACHE_CONFIG="$RECIPES,false,20480"
   FLASHINFER_GAUDI_NATIVE_LIBRARY="$FI_OP"
   VLLM_HPU_NATIVE_SAMPLING_LIBRARY="$SAMPLING_OP"
@@ -147,11 +156,13 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   # GDN prefill (section 22): GDN_PREFILL_H25=1 runs the chunk recurrence in the FlashQLA gate-free form with BF16
   # products and an FP32 solve from 1024 tokens (models/qwen4exp/gdn_h14.py): measured no faster on this model, so
   # off; GDN_FUSED_RMSNORM=1 (default) uses the fused gated RMSNorm (faster, changes the output bits; 0 = exact)
-  VLLM_QWEN4EXP_GDN_H25="${GDN_PREFILL_H25:-0}" VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY="${GDN_PREFILL_H25:-0}"
+  VLLM_QWEN4EXP_GDN_H25="${GDN_PREFILL_H25:-$GDN_TPC_ON}" VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY="${GDN_PREFILL_H25:-0}"
   VLLM_GDN_FUSED_RMSNORM_GATED="${GDN_FUSED_RMSNORM:-1}"
   # GDN_PREFILL_BF16=1: the FlashInfer GDN prefill tactic (the path this model takes) computes its chunk products
   # in BF16, solve and state stay FP32 (section 22)
   VLLM_HPU_GDN_PREFILL_COMPUTE_DTYPE="$GDN_PREFILL_DTYPE"
+  # GDN_TPC (above): the TPC conv needs the H25 masked-prefill dispatch to take padded prompt chunks
+  VLLM_QWEN4EXP_GDN_TPC="$GDN_TPC_ON"
   # full attention over the whole context per request: KV gathered once, FP8 matmuls, one softmax (section 17)
   VLLM_HPU_SHARED_PREFIX_ATTN=dense VLLM_HPU_DENSE_ATTN_QK=fp8 VLLM_HPU_DENSE_ATTN_AV=fp8
   # single-request decode from 32K tokens on reads a contiguous per-layer KV copy instead of gathering the pages
