@@ -153,5 +153,7 @@ $("theme").onclick = () => { const theme = document.documentElement.dataset.them
 $("search").oninput = list; $("filter").onchange = list;
 document.querySelectorAll("[data-pane]").forEach(button => { button.onclick = () => { pane = button.dataset.pane; document.querySelectorAll("[data-pane]").forEach(b => b.setAttribute("aria-selected", String(b === button))); content(); }; });
 $("copy").onclick = async () => { try { await navigator.clipboard.writeText($("content").textContent); text("copy", "Copied"); setTimeout(() => text("copy", "Copy"), 1500); } catch (_) { notice("Clipboard unavailable; select the text to copy it."); } };
-async function poll() { await refresh(); setTimeout(poll, 2000); }
+// refresh every second; ?interval=<ms> picks another period (at least 250 ms)
+const POLL_MS = Math.max(250, Number(new URLSearchParams(location.search).get("interval")) || 1000);
+async function poll() { const started = Date.now(); await refresh(); setTimeout(poll, Math.max(0, POLL_MS - (Date.now() - started))); }
 poll();

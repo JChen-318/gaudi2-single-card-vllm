@@ -9911,8 +9911,8 @@
       "bytes": 38
     },
     "vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/__init__.py": {
-      "sha256": "83509e14874c2555617b9cf38a96060eaa15c67349673f6e2042e2e7ddd111a8",
-      "bytes": 34986
+      "sha256": "489e2f5dbd06fb607561066d62bb5a6fa892cdb2efafbfc0f94b4fbffdb6a7de",
+      "bytes": 35187
     },
     "vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/web/favicon.svg": {
       "sha256": "30bee70764dd3b598629f28dda82ae852989b11e20962cf77686199dc08a3e0e",
@@ -9935,8 +9935,8 @@
       "bytes": 11803
     },
     "vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/web/monitor.js": {
-      "sha256": "7a440ba9e67396c50cec9251c6a9f828e873d2d8a26722692df69d1698d7a908",
-      "bytes": 12372
+      "sha256": "3dc8a585b877ef86e14d212eb0e6e5a845aa23cb5941c1ccb6f57ace1c991e26",
+      "bytes": 12621
     },
     "vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/web/tokens.css": {
       "sha256": "5855c1940d798a8a14093694aa7c6816fca603d6db879ce08fd229a05e72ab90",

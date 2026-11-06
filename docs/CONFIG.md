@@ -34,7 +34,7 @@
 `API_MONITOR=1` 时，`serve.sh` 给 vLLM 加一个 ASGI 中间件（`vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/`，`--middleware`），页面仿照 Strata 的 API Monitor：
 
 - **引擎**：空闲 / prefill / 生成中，模型名和上下文长度；投机解码每轮平均接受的 token 数和各草稿位置的接受率；前缀缓存命中率；KV 缓存占用和运行、排队的请求数。都来自 vLLM 自己的 Prometheus 计数（与 `/metrics` 同源），自启动以来累计。
-- **加速卡**：温度、功率、显存和 AIP 利用率，来自 `hl-smi`。只在页面打开时读取，最多每 5 秒一次。
+- **加速卡**：温度、功率、显存和 AIP 利用率，来自 `hl-smi`。只在页面打开时读取，最多每 2 秒一次（环境变量 `VLLM_API_MONITOR_HL_SMI_INTERVAL` 可改）。页面每秒刷新一次，网址加 `?interval=500` 可改为 0.5 秒（最短 0.25 秒）。
 - **请求**：最近 100 个发往 `/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/messages` 的请求，每个请求有输入、输出、思考内容和原始响应（每项最多保留 25.6 万字符，内联图片只记大小），以及耗时、首 token、token 数、命中前缀缓存的 token 数、prefill 速度（实际计算的 prompt token ÷ 首 token 时间，与 llm_speedtest 等客户端测速同一口径；命中缓存的部分不算）、decode 速度、每轮接受数。
 
 说明：

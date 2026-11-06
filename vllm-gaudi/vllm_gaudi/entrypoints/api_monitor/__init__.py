@@ -154,18 +154,21 @@ def request_engine_figures(before: dict[str, float], after: dict[str, float]) ->
 
 
 class DeviceTelemetry:
-    """The card's temperature, power, memory and utilization from hl-smi: read in a thread, at most every 5 s and
-    only while the page is open (a reading is asked for), so an idle server never runs hl-smi."""
+    """The card's temperature, power, memory and utilization from hl-smi (about 0.2 s per call): read in a thread,
+    at most every VLLM_API_MONITOR_HL_SMI_INTERVAL seconds (2) and only while the page is open (a reading is asked
+    for), so an idle server never runs hl-smi."""
 
     FIELDS = ("name", "temperature.aip", "power.draw", "memory.used", "memory.total", "utilization.aip",
               "clocks.current.soc")
 
-    def __init__(self, binary: str | None = "auto", interval: float = 5.0) -> None:
+    def __init__(self, binary: str | None = "auto", interval: float | None = None) -> None:
         """binary: the hl-smi to run; "auto" finds it on PATH or in /usr/bin, None turns the readings off."""
         if binary == "auto":
             binary = shutil.which("hl-smi") or ("/usr/bin/hl-smi" if os.path.exists("/usr/bin/hl-smi") else None)
         self.binary = binary
-        self.interval = interval
+        if interval is None:
+            interval = float(os.environ.get("VLLM_API_MONITOR_HL_SMI_INTERVAL", "2"))
+        self.interval = max(0.5, interval)
         self.value: dict[str, Any] | None = None
         self._at = 0.0
         self._lock = threading.Lock()
