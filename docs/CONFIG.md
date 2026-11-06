@@ -11,7 +11,7 @@
 | `MAX_MODEL_LEN` | 262144 | 单个请求的最大上下文（提示词 + 生成） |
 | `MAX_NUM_SEQS` | 2 | 同时处理的请求数（1–16）。只测过 1–2 |
 | `KV_CACHE_GIB` | 29 | KV 缓存显存（FP8），29 GiB 约 52.8 万 token（2048 token 的块；不开前缀缓存时块是 1664 token，28 GiB 就有 52.7 万） |
-| `PREFILL_CHUNK` | 4096 | prefill 每步处理的 token 数（第 22 节）。2048 少占约 8 GB 显存，32K 以上的提示词慢 4–6% |
+| `PREFILL_CHUNK` | 2048 | prefill 每步处理的 token 数（第 22 节）。4096 让 32K 以上的提示词快 4–6%，但多占约 8 GB 显存，按默认的显存安排（两个 256K KV、KV 镜像、262K 的上下文分桶）预热最大分桶时显存不足，要先在别处腾出显存 |
 | `PREFILL_SPLIT_MIN_PAGES`、`PREFILL_SPLIT_DIAG_CAUSAL` | 128、1 | 上下文达到这么多页（每页 128 token）后，prefill 注意力按 8K 切片批量计算；分块自身那一块用内核的因果模式，不再加偏置（第 22 节） |
 | `GDN_FUSED_RMSNORM`、`GDN_PREFILL_H25` | 1、0 | GDN 输出用融合的门控 RMSNorm（更快，输出数值会变，0 = 原来的精确算法）；H25 分块递推在这个模型上实测没有收益，默认关（第 22 节） |
 | `PREFIX_CACHE` | 1 | 前缀缓存：请求开头与之前某个请求相同的部分直接复用（第 18 节）。0 = 关闭 |
