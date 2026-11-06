@@ -1,5 +1,5 @@
 {
-  "captured_at_utc": "2026-10-19T08:26:52.387722+00:00",
+  "captured_at_utc": "2026-11-06T16:46:33.790580+00:00",
   "source_only": true,
   "components": [
     {
@@ -9783,8 +9783,8 @@
       "bytes": 2546
     },
     "vllm-gaudi/vllm_gaudi/__init__.py": {
-      "sha256": "96a754cac1babc88662ec93885e0c378a6612e8a618bcc1ec18c92ff0bb5a62b",
-      "bytes": 7203
+      "sha256": "6c46a71635efffe4a30cfc609b18a367af68e259efb3089cf8f4897cc5200eba",
+      "bytes": 7790
     },
     "vllm-gaudi/vllm_gaudi/attention/__init__.py": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -9795,8 +9795,8 @@
       "bytes": 0
     },
     "vllm-gaudi/vllm_gaudi/attention/backends/hpu_attn.py": {
-      "sha256": "6069d23e4b058e0b742566fda334427f8a6fb1a98c52418667ffa3e74a0baf73",
-      "bytes": 47805
+      "sha256": "82a7817b0f0afc935c1638afb7c76c7419502d16ec9b2a4f40e39e4b4418de94",
+      "bytes": 46812
     },
     "vllm-gaudi/vllm_gaudi/attention/oot_mla.py": {
       "sha256": "b78a1da4d6f034fce64e8f6b296b26703b9cff50943f79de4924bb1045465388",
@@ -9975,8 +9975,8 @@
       "bytes": 4481
     },
     "vllm-gaudi/vllm_gaudi/envs.py": {
-      "sha256": "13b627fde454a447d46ada86de4c60ac932cd15a036c9fc16a1bcf68f004573d",
-      "bytes": 119738
+      "sha256": "03283615673a32a83753aa659eb986d964a1cd3057eaf7a4aaae167919d2e3b0",
+      "bytes": 120210
     },
     "vllm-gaudi/vllm_gaudi/extension/__init__.py": {
       "sha256": "9cb19ecd3ad381e6466571d13b8b7abe1f2fb5236a40331791f3d26b1360fc4a",
@@ -9991,8 +9991,8 @@
       "bytes": 578
     },
     "vllm-gaudi/vllm_gaudi/extension/bucketing/common.py": {
-      "sha256": "5707dfb3d6b86913d2cf586b95f5c6687619da1a2067577aafe233459ad4eb5b",
-      "bytes": 29188
+      "sha256": "2835d0996fcf75c3b6aec410074324d9d0565bff2407b6fafe503af3f7823994",
+      "bytes": 30519
     },
     "vllm-gaudi/vllm_gaudi/extension/bucketing/exponential.py": {
       "sha256": "8e33f79f6ee34e55bd3bdb836725a85b624f04d354e9ff335e09184a86eba067",
@@ -10027,8 +10027,8 @@
       "bytes": 762
     },
     "vllm-gaudi/vllm_gaudi/extension/defragmentation.py": {
-      "sha256": "3dbeb5ceaa1fa8d7043874040f36db9013ddf8f5602923346d00e3dfff138064",
-      "bytes": 11040
+      "sha256": "2f970673ad3d641e3a3da6023f0ec7b869b7254cdb49374b79757c2a913eb000",
+      "bytes": 11356
     },
     "vllm-gaudi/vllm_gaudi/extension/environment.py": {
       "sha256": "46a0179702ae124afcfdd36b89278282b613cf3a87d58bada76b62d5eabd44f1",
@@ -10047,8 +10047,8 @@
       "bytes": 560
     },
     "vllm-gaudi/vllm_gaudi/extension/ops.py": {
-      "sha256": "d29898a8839175884ff1750a94e5a718d6b97377fa2d406d6dd5e7698ebcada9",
-      "bytes": 120491
+      "sha256": "e7f064ff22692105f97bbbfded47c7fdcb16a751c1f348ef09e94d577f60edf5",
+      "bytes": 125784
     },
     "vllm-gaudi/vllm_gaudi/extension/profiler.py": {
       "sha256": "a64420bcb66b093740bd02d2152233d7e0a97f856980eaf214538e0baa6263aa",
@@ -10091,8 +10091,8 @@
       "bytes": 4257
     },
     "vllm-gaudi/vllm_gaudi/models/__init__.py": {
-      "sha256": "a0c9b6f49fefb46fa55a716c2bfbf27376cf4f9261725ffb6989ffa7974f3bcb",
-      "bytes": 5070
+      "sha256": "b5f5473e8ace0a2c52db24e08b97c4d9586708d09a90946d2dd1d1b9790469d7",
+      "bytes": 6085
     },
     "vllm-gaudi/vllm_gaudi/models/bert.py": {
       "sha256": "346572ca7ff5f99e3d5c08047cff9ffad227a95a45037bd4c7b25ac6d04acaab",
@@ -10199,8 +10199,8 @@
       "bytes": 24677
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_5.py": {
-      "sha256": "b8889702e11021f4a4c34d39c2c725ae13536931f6e90167fae841d0dce36176",
-      "bytes": 38799
+      "sha256": "76a0bd8d7aee0518b4f986af334f544c299c279439dca0956689ffa850674466",
+      "bytes": 52718
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_moe.py": {
       "sha256": "0a457215a49c0563949e2d7b8d1ccfe547eb2211d137b3609cf83a85bfbc4981",
@@ -10213,6 +10213,122 @@
     "vllm-gaudi/vllm_gaudi/models/qwen3_vl_moe.py": {
       "sha256": "20f0301e661e30260e64dc8e6fe9a46262a2cdc5a2486c0cc6665de3ffb281ea",
       "bytes": 1617
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4_exp.py": {
+      "sha256": "3bd76925e7a49b510eb2da8a11f244bd26ba1d0609d92bc26ec1adbcd9efa803",
+      "bytes": 91408
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/__init__.py": {
+      "sha256": "1e7137ee03ce4b1990c9c0813ef0869738837f1ca50999fcb5c64d5c29141bcb",
+      "bytes": 861
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/_gc_kernel_path.py": {
+      "sha256": "4dfc20c217b62bb622b10bf589968fcbfd1585a8662402d63b4ee7bb1a3738a1",
+      "bytes": 3475
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/_materialize.py": {
+      "sha256": "f52f19ba876784a40fb04418f80376dd084eeeb62dff1606e1bc3689944a2681",
+      "bytes": 3709
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/config.py": {
+      "sha256": "7bbb3ba52fd488ae3fbcf83bd498a3476ec8d4e4287d6428241fd6a453c3946f",
+      "bytes": 8923
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/control.py": {
+      "sha256": "769aad08b8aeac184171274c279bd26a9315db53ea8745530b7c97a1326751b2",
+      "bytes": 11064
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/csf_math.py": {
+      "sha256": "9dc054a3031a6e221f97b191135f85d9ed0a445f21d734990e4986fe362ea234",
+      "bytes": 1236
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/decode_graph.py": {
+      "sha256": "ab7d7081e06964a071c4be9ba4f78d4915dd71df22e8b6dfe758ababcb1583dc",
+      "bytes": 40587
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/gdn_h14.py": {
+      "sha256": "82e6e67d8130751abe65bf59ebbd0d9a733c126b94d6a09e9e2fcc740b7ce437",
+      "bytes": 19558
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/h23.py": {
+      "sha256": "669794b2652d34597d71c0abe145a96313aa0083b4539b061bff6f37a88e4fdf",
+      "bytes": 3480
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/h24.py": {
+      "sha256": "398a9df4b372e7c1cc3490c810cf22ea7202d75569749da101a397764469a729",
+      "bytes": 4051
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/h28.py": {
+      "sha256": "94759f283d36a520b9f28d49ffafd68488bbb4d64f6be7aa0191943bfd9ca98e",
+      "bytes": 2479
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/h29.py": {
+      "sha256": "c10d21d4037442ac5fdd9feea51a4af882b6cafecb8ba93754abfe64ddbd7f55",
+      "bytes": 3448
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/habana_compat.py": {
+      "sha256": "278d9ba1ac18549de0d6b4552f999d97265449ec8497876e6760cc5c7b1a6328",
+      "bytes": 1872
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/hf_config.py": {
+      "sha256": "de7d4c00834f6f1208770f908f3a8406e0ad5f216ed03cfdb0be5cec3fdedadd",
+      "bytes": 4316
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/hyperconnection_amd.py": {
+      "sha256": "b5ddf4cd622b9f1c09888bdbb5d6a8d70605718e393cfde650218579ab405d28",
+      "bytes": 14359
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/hyperconnection_base.py": {
+      "sha256": "ca06b2a2e7619bd721b615c09e6c7141a55f17ea901fa0a42fdc96e746654f64",
+      "bytes": 2956
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/loader.py": {
+      "sha256": "f0b00757c2adf3edd49d7e036f28926e0ba4f7bf338f1128730992d278a6a6e9",
+      "bytes": 5049
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/merged_weights.py": {
+      "sha256": "fbef7bbb219df3e648007df3a959fee05ac1672d36945b0c5b0e1a7e09f8bc15",
+      "bytes": 4245
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/mixed_loader.py": {
+      "sha256": "b0a385e5d282ea3ca29c275b5be787c980db17cf20b5174f7f70d10fd4e0081b",
+      "bytes": 4070
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/model.py": {
+      "sha256": "95c77001f67caba99bd76e38b2225b8d2722b1ce42eb31f2610175ee051b4081",
+      "bytes": 45622
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/mtp.py": {
+      "sha256": "0872be83aa5c121c8362bfb97cef5dce287158a6289d09af38bc1254f7f5340b",
+      "bytes": 12893
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/packed_moe.py": {
+      "sha256": "181ccadaef8b0fb19abf8fc70e508ab12fd721d11ab2b3b585c18d590d8389ee",
+      "bytes": 95780
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/ple_embedding.py": {
+      "sha256": "66df9b75e7cdf09e333b886537a53d73667a06b3af868b0ef0f8520f68be596e",
+      "bytes": 9309
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/ple_layer.py": {
+      "sha256": "807e5cd4966689adc9ac88720c51448ed0c59c86c395808e70c56667b5bcf922",
+      "bytes": 19931
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/ple_runtime.py": {
+      "sha256": "b331a0ace9350af17e01f4110cc1475aa4c31e57d627a55df10b262fdb2964ae",
+      "bytes": 50850
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/qsa.py": {
+      "sha256": "6b86b6f3b137c828a70cfe2a61776b8cdf775726af50e9f57295cdebb2398376",
+      "bytes": 60312
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/qsa_math.py": {
+      "sha256": "60ea2db2fd2d6b02fc4bee7269762a6973a82288c579b803f5ccec037a9d79c4",
+      "bytes": 57558
+    },
+    "vllm-gaudi/vllm_gaudi/models/qwen4exp/weights.py": {
+      "sha256": "d44caf809991d2e60d45cc735515c070d43deea0dd95dd93d7881814fd8ffb58",
+      "bytes": 7202
     },
     "vllm-gaudi/vllm_gaudi/models/seed_oss.py": {
       "sha256": "0086dbad1664ed7122d4668da57aad612992c642ba34c4f2b77e8c24d0169916",
@@ -10779,8 +10895,8 @@
       "bytes": 4409
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_modelopt.py": {
-      "sha256": "ada42509f83adf8cb46c2717295c79f847fc53810009760e34be4716ca7f6402",
-      "bytes": 10737
+      "sha256": "a102291b4b69697d00f49c0e88793f2a39607417271cba9a8939cfcc75e562b8",
+      "bytes": 26718
     },
     "vllm-gaudi/vllm_gaudi/ops/hpu_mxfp4.py": {
       "sha256": "e509f77af51d64d627856305e45e29336f6813954697f7a2ada6963a4d66f1df",
@@ -10805,6 +10921,14 @@
     "vllm-gaudi/vllm_gaudi/ops/hpu_weights.py": {
       "sha256": "5d327196c40b0d6d84ab8bae78993e0e3305eebee2d1135654101099cb35c7b4",
       "bytes": 11812
+    },
+    "vllm-gaudi/vllm_gaudi/ops/modelopt_csf.py": {
+      "sha256": "9ff5fe924ce83ede2252742775deda5bf59d59dec2a228968d71747b02362fa6",
+      "bytes": 46290
+    },
+    "vllm-gaudi/vllm_gaudi/ops/nvfp4_tpc_layout.py": {
+      "sha256": "70a1adb1607d4e1f76c19ab090c1191c8e70d9ef8ce9e23816f565ee8d686b87",
+      "bytes": 19917
     },
     "vllm-gaudi/vllm_gaudi/ops/ops_selector.py": {
       "sha256": "303849320a5c30db2e6efc08db5dee5dbc79626bc2c56076b4ec8fe56b27231b",
@@ -11011,8 +11135,8 @@
       "bytes": 0
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/attention_group_routing.py": {
-      "sha256": "24c4a82c598351c6bf050137b4b3199b7d233631800b63292e0831a5ecf2d2b1",
-      "bytes": 3945
+      "sha256": "65d1f1b69d6974020ed2b2f6e3cd32f1318bef9f81d963be5e5dbe7094e05041",
+      "bytes": 4655
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/decode_fast_paths.py": {
       "sha256": "9b71608d167071f58b85776fc7b7089c9abb6e5fa1561442cfa2dae3c7cfd5ab",
@@ -11055,12 +11179,12 @@
       "bytes": 39467
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_model_runner.py": {
-      "sha256": "af4edf87a6aa39c3d14b39822bcdec99257ef5c956d8386772981e42d93d0356",
-      "bytes": 603029
+      "sha256": "015b2b1923c1dc5280f8c91ebf13c6dbc8da3484b3ba5214a707890e9b938639",
+      "bytes": 619551
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_worker.py": {
-      "sha256": "cd837c57e3de99c3ea872d7ae00368b0026bd4cf23ecf86dfac613ddc55675a1",
-      "bytes": 74369
+      "sha256": "6b4de1df5298233cd4e0d5c61d63fb3775da08a0e55a709ca13003767d60b28b",
+      "bytes": 74562
     },
     "vllm-core/.agents/skills/debug-ima/SKILL.md": {
       "sha256": "40922f6d96e5a9a55e9a3da18c6a9c3d6e5b1bd09946e7d29ce9101a1450b283",
@@ -38291,8 +38415,12 @@
       "bytes": 6276
     },
     "vllm-gaudi/vllm_gaudi/extension/prefill_split_attn.py": {
-      "sha256": "1707b5f79dba5b4184252b638da89276ff77b263fce80796a7ed041ee37c79dc",
-      "bytes": 4198
+      "sha256": "a76eafd5487978a4c358f87ab3fcb0d8ef1b4c5712a9ad29fb97ff2a4ea6d65a",
+      "bytes": 5298
+    },
+    "vllm-gaudi/vllm_gaudi/extension/prefill_tile_replay.py": {
+      "sha256": "3a3bf1f6950b75739ea78a1c2dcd0e166685b53975d687c2f01ecf2057d08fec",
+      "bytes": 9461
     },
     "vllm-gaudi/vllm_gaudi/models/qwen3_vision_buckets.py": {
       "sha256": "1c85312a97e76124e70427e0391139f70bacde358cf7df7b3e18af11a99c7377",
