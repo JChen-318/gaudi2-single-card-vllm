@@ -80,8 +80,9 @@ fi
 # Request monitor at /api-monitor (docs/CONFIG.md): the last 100 requests' prompts and answers in memory, with the
 # engine's counters and the card's hl-smi readings. Added after the request guard, so it is the outermost middleware.
 [ "${API_MONITOR:-0}" = 1 ] && ARGS+=(--middleware vllm_gaudi.entrypoints.api_monitor.ApiMonitor)
-# Prefill chunk (tokens per prompt step). Empty = vLLM's default of 2048, which the tuned buckets assume.
-[ -n "${PREFILL_CHUNK:-}" ] && ARGS+=(--max-num-batched-tokens "$PREFILL_CHUNK")
+# Prefill chunk (tokens per prompt step; section 22). 4096 is the measured default: 4-6% faster prompts from
+# 32K tokens on than 2048, about 8 GB more peak activation memory.
+ARGS+=(--max-num-batched-tokens "${PREFILL_CHUNK:-4096}")
 # Prefix caching (section 18): attention KV through vLLM's prefix cache, GDN states as device snapshots
 if [ "${PREFIX_CACHE:-1}" = 1 ]; then
   ARGS+=(--enable-prefix-caching)
@@ -134,16 +135,16 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_SHARED_PREFIX_DECODE=1 VLLM_HPU_SKIP_UNBACKED_BLOCK_LIST=1 VLLM_HPU_SHARE_GROUP_MASKS=1
   VLLM_HPU_UNIQUE_COMPILE_CODE=1 VLLM_HPU_FUSED_MODEL_ENTRY=1 VLLM_HPU_WARMUP_PHASE_GC=1
   # prefill (section 18): context buckets every 64 pages (8K tokens) for the largest prompt chunk from
-  # PREFILL_SPLIT_MIN_PAGES pages on (256 = 32K tokens); those chunks attend to the cached context as 8K-key slices
+  # PREFILL_SPLIT_MIN_PAGES pages on (128 = 16K tokens); those chunks attend to the cached context as 8K-key slices
   # stacked into one batched FusedSDPA call. PREFILL_SPLIT_DIAG_CAUSAL=1 runs the chunk-against-itself block with
   # the kernel's causal mode instead of a bias (section 22)
-  VLLM_HPU_PROMPT_FINE_CTX_STEP=64 VLLM_HPU_PROMPT_FINE_CTX_MIN="${PREFILL_SPLIT_MIN_PAGES:-256}"
-  VLLM_HPU_PREFILL_SPLIT_ATTN=1 VLLM_HPU_PREFILL_SPLIT_DIAG_CAUSAL="${PREFILL_SPLIT_DIAG_CAUSAL:-0}"
+  VLLM_HPU_PROMPT_FINE_CTX_STEP=64 VLLM_HPU_PROMPT_FINE_CTX_MIN="${PREFILL_SPLIT_MIN_PAGES:-128}"
+  VLLM_HPU_PREFILL_SPLIT_ATTN=1 VLLM_HPU_PREFILL_SPLIT_DIAG_CAUSAL="${PREFILL_SPLIT_DIAG_CAUSAL:-1}"
   # GDN prefill (section 22): GDN_PREFILL_H25=1 runs the chunk recurrence in the FlashQLA gate-free form with BF16
-  # products and an FP32 solve from 1024 tokens (models/qwen4exp/gdn_h14.py; default off for this model);
-  # GDN_FUSED_RMSNORM=1 uses the fused gated RMSNorm (faster, changes the output bits)
+  # products and an FP32 solve from 1024 tokens (models/qwen4exp/gdn_h14.py): measured no faster on this model, so
+  # off; GDN_FUSED_RMSNORM=1 (default) uses the fused gated RMSNorm (faster, changes the output bits; 0 = exact)
   VLLM_QWEN4EXP_GDN_H25="${GDN_PREFILL_H25:-0}" VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY="${GDN_PREFILL_H25:-0}"
-  VLLM_GDN_FUSED_RMSNORM_GATED="${GDN_FUSED_RMSNORM:-0}"
+  VLLM_GDN_FUSED_RMSNORM_GATED="${GDN_FUSED_RMSNORM:-1}"
   # full attention over the whole context per request: KV gathered once, FP8 matmuls, one softmax (section 17)
   VLLM_HPU_SHARED_PREFIX_ATTN=dense VLLM_HPU_DENSE_ATTN_QK=fp8 VLLM_HPU_DENSE_ATTN_AV=fp8
   # single-request decode from 32K tokens on reads a contiguous per-layer KV copy instead of gathering the pages

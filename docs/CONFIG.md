@@ -11,7 +11,9 @@
 | `MAX_MODEL_LEN` | 262144 | 单个请求的最大上下文（提示词 + 生成） |
 | `MAX_NUM_SEQS` | 2 | 同时处理的请求数（1–16）。只测过 1–2 |
 | `KV_CACHE_GIB` | 29 | KV 缓存显存（FP8），29 GiB 约 52.8 万 token（2048 token 的块；不开前缀缓存时块是 1664 token，28 GiB 就有 52.7 万） |
-| `GDN_PREFILL_H25`、`GDN_FUSED_RMSNORM`、`PREFILL_CHUNK`、`PREFILL_SPLIT_MIN_PAGES`、`PREFILL_SPLIT_DIAG_CAUSAL` | 空 | prefill 选项，默认都不开（第 22 节）：GDN 分块改用 FlashQLA 形式并在 1024 token 以上用 BF16；GDN 输出用融合 RMSNorm；prefill 分块大小（空 = 2048）；分片注意力的起点页数（空 = 256，即 32K）；对角块用内核的因果模式。前两项会改变输出的数值 |
+| `PREFILL_CHUNK` | 4096 | prefill 每步处理的 token 数（第 22 节）。2048 少占约 8 GB 显存，32K 以上的提示词慢 4–6% |
+| `PREFILL_SPLIT_MIN_PAGES`、`PREFILL_SPLIT_DIAG_CAUSAL` | 128、1 | 上下文达到这么多页（每页 128 token）后，prefill 注意力按 8K 切片批量计算；分块自身那一块用内核的因果模式，不再加偏置（第 22 节） |
+| `GDN_FUSED_RMSNORM`、`GDN_PREFILL_H25` | 1、0 | GDN 输出用融合的门控 RMSNorm（更快，输出数值会变，0 = 原来的精确算法）；H25 分块递推在这个模型上实测没有收益，默认关（第 22 节） |
 | `PREFIX_CACHE` | 1 | 前缀缓存：请求开头与之前某个请求相同的部分直接复用（第 18 节）。0 = 关闭 |
 | `PREFIX_STATE_SLOTS` | 16 | GDN 状态快照个数，每个约 155 MB 显存，按最近使用淘汰 |
 | `PREFIX_STATE_INTERVAL` | 16384 | 除每个提示词末尾前的最后一个 2048 边界外，每隔多少 token 存一份快照（2048 的倍数） |
