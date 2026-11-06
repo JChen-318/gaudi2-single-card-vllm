@@ -45,7 +45,10 @@ def ensure_gc_kernel_path() -> str:
     ``/usr/lib/habanalabs/libtpc_kernels.so``) are preserved after it.
     If the built library does not exist yet, the environment is left
     untouched so a host/CPU-only import does not point SynapseAI at a
-    non-existent file. Returns the resulting ``GC_KERNEL_PATH`` value.
+    non-existent file. Left untouched as well when the launcher uses the
+    single-file TPC kernel shim (``KIRO_TPC_LIBS`` set) or the on-disk recipe
+    cache (``PT_HPU_RECIPE_CACHE_CONFIG``): the launcher then lists the
+    Qwen4Exp library itself. Returns the resulting ``GC_KERNEL_PATH`` value.
     """
     kernel = str(qwen4exp_kernel_library())
     current = os.environ.get("GC_KERNEL_PATH", "")
@@ -53,6 +56,17 @@ def ensure_gc_kernel_path() -> str:
     if kernel in entries:
         return current
     if not Path(kernel).is_file():
+        return current
+    # Single-file deployments own the library list. scripts/serve.sh (27B) and
+    # scripts/serve_qwen4exp.sh point GC_KERNEL_PATH at the TPC kernel shim and
+    # list the real libraries in KIRO_TPC_LIBS; with the on-disk recipe cache
+    # (PT_HPU_RECIPE_CACHE_CONFIG) Synapse refuses a GC_KERNEL_PATH that is not
+    # one regular file. Prepending here would stop every model in this tree from
+    # starting (this module is imported while vllm_gaudi registers its models),
+    # so leave both variables to the launcher.
+    if os.environ.get("KIRO_TPC_LIBS") is not None:
+        return current
+    if os.environ.get("PT_HPU_RECIPE_CACHE_CONFIG", "").split(",")[0]:
         return current
     os.environ["GC_KERNEL_PATH"] = os.pathsep.join([kernel, *entries])
     return os.environ["GC_KERNEL_PATH"]

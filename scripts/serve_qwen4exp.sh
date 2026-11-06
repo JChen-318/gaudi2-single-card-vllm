@@ -15,7 +15,28 @@ MODEL="${MODEL:-$HOME/models/qwen4exp-flashnext-plain}"
 PORT="${PORT:-8000}"
 
 export PATH="/usr/bin/habanatools:$PATH"
-export GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so
+# Kernel libraries the way scripts/serve.sh does it for the 27B: GC_KERNEL_PATH names one file, the TPC kernel
+# shim, which loads the libraries listed in KIRO_TPC_LIBS (the Qwen4Exp kernels first, then the stock library).
+# One regular file is what the on-disk recipe cache requires, and the model code leaves both variables alone when
+# KIRO_TPC_LIBS is set (vllm_gaudi/models/qwen4exp/_gc_kernel_path.py). RECIPE_CACHE=0 turns the cache off;
+# without the shim (not built) the launcher falls back to the plain two-library list and no cache.
+QWEN4EXP_KERNELS="$ROOT/vllm-gaudi/csrc/qwen4exp/build/libqwen4exp_gaudi2_kernels.so"
+STOCK_KERNELS=/usr/lib/habanalabs/libtpc_kernels.so
+SHIM="$ROOT/build/native/libkiro_tpc_shim.so"
+[ -f "$QWEN4EXP_KERNELS" ] || { echo "missing $QWEN4EXP_KERNELS: build vllm-gaudi/csrc/qwen4exp first"; exit 1; }
+if [ -f "$SHIM" ]; then
+  export GC_KERNEL_PATH="$SHIM"
+  export KIRO_TPC_LIBS="$QWEN4EXP_KERNELS:$STOCK_KERNELS"
+  if [ "${RECIPE_CACHE:-1}" = 1 ]; then
+    # The cache is only valid for these exact libraries: name it after their hash.
+    LIBHASH=$(cat "$SHIM" "$QWEN4EXP_KERNELS" "$STOCK_KERNELS" | sha256sum | cut -c1-12)
+    RECIPES="${RECIPE_DIR:-$ROOT/build/recipe-cache-qwen4exp}-$LIBHASH"
+    mkdir -p "$RECIPES"
+    export PT_HPU_RECIPE_CACHE_CONFIG="$RECIPES,false,20480"
+  fi
+else
+  export GC_KERNEL_PATH="$QWEN4EXP_KERNELS:$STOCK_KERNELS"
+fi
 export HABANA_LOGS="${HABANA_LOGS:-/var/log/habana_logs/}"
 export HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw
 export HABANA_PLUGINS_LIB_PATH=/usr/lib/habanatools/habana_plugins

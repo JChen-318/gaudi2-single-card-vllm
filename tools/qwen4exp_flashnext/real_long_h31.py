@@ -41,9 +41,16 @@ def corpus() -> str:
     for rel in SOURCES:
         try:
             text = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=ROOT, capture_output=True, check=True).stdout
-        except subprocess.CalledProcessError:
-            continue
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # Not a git checkout (an exported tree): read the file as it is on disk.
+            path = ROOT / rel
+            if not path.is_file():
+                continue
+            text = path.read_bytes()
         parts.append(f"\n\n===== {rel} =====\n" + text.decode(errors="replace"))
+    if not parts:
+        # The callers grow the corpus by doubling it until it is long enough: an empty one never gets there.
+        raise SystemExit(f"no corpus: none of {len(SOURCES)} source files found under {ROOT}")
     return "".join(parts)
 
 

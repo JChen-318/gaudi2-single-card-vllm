@@ -122,6 +122,8 @@ def test_without_main_buffers_nothing_is_shared():
 def processor(fake_hpu=True):
     funcs, logs, ns = T.class_methods(T.RUN_SRC, PROC, {"is_fake_hpu": lambda: fake_hpu})
     p = types.SimpleNamespace(block_size=128, interleaved_sliding_window=False, prefill_use_fusedsdpa=True, calls=0)
+    # The 27B builds its paged metadata; only Qwen4Exp's QSA skips it (process_metadata's early return).
+    p._attention_ignores_paged_metadata = lambda: False
     for k, f in funcs.items():
         setattr(p, k, types.MethodType(f, p))
     inner = p._set_block_mapping

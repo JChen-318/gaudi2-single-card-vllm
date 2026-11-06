@@ -11,14 +11,16 @@ core, with the two input projections merged into one MME GEMM:
   the [Hv, 128, 128] BF16 state, kept in TPC registers across the sequence,
 * ``gdn_gated_norm``: ``rmsnorm(y) * act(z)`` before ``out_proj``.
 
-Kill switch: ``VLLM_QWEN4EXP_GDN_TPC=0``. Any non-HPU tensor, unsupported
+Kill switch: ``VLLM_QWEN4EXP_GDN_TPC=0``. Unset, the switches here are on for
+Qwen4Exp only (``enable_for_qwen4exp``); other models sharing the qwen3_5 GDN
+layer keep their previous path. Any non-HPU tensor, unsupported
 geometry/dtype, missing extension, or non-uniform sequence layout falls back
 to the exact torch code in ``qwen3_5.py`` (the caller keeps that path).
 All custom-op inputs are materialized contiguous tensors: un-materialized
 views with non-standard strides are never passed to the HPU ops.
 
 H25 (this unit) adds the *dispatch* half of the same fast path, behind its own
-umbrella switch ``VLLM_QWEN4EXP_GDN_H25=0`` (default on):
+umbrella switch ``VLLM_QWEN4EXP_GDN_H25=0`` (default on for Qwen4Exp):
 
 * the fused prefill conv now runs under the runner's ``padding_mask_flat``
   (live ``vllm serve`` always supplies one, which used to send the whole
@@ -56,9 +58,29 @@ from ._materialize import materialized as _materialized  # noqa: E402
 _OP_NAMES = ("recur", "conv", "conv_rows", "gated_norm")
 _OPS: dict | bool | None = None
 
+# The H14/H25/H26 paths live in the GDN layer that qwen3_5.py shares with every
+# Qwen3.5-family model (the 27B included), but they were measured on Qwen4Exp
+# only. So an unset switch follows the model: Qwen4Exp opts in when it builds
+# its text model (enable_for_qwen4exp); any other model keeps the previous GDN
+# path. An explicit VLLM_QWEN4EXP_GDN_* value still wins either way.
+_MODEL_DEFAULT = False
+
+
+def enable_for_qwen4exp() -> None:
+    """Make the unset H14/H25/H26 switches default to on (called by Qwen4Exp)."""
+    global _MODEL_DEFAULT
+    _MODEL_DEFAULT = True
+
+
+def _switch(name: str) -> bool:
+    value = os.environ.get(name, "")
+    if value == "":
+        return _MODEL_DEFAULT
+    return value != "0"
+
 
 def gdn_tpc_enabled() -> bool:
-    return os.environ.get("VLLM_QWEN4EXP_GDN_TPC", "1") != "0"
+    return _switch("VLLM_QWEN4EXP_GDN_TPC")
 
 
 def h25_enabled() -> bool:
@@ -67,8 +89,9 @@ def h25_enabled() -> bool:
     Covers only *which* kernel runs: the padded-prefill conv unlock, the
     short-span recurrence gate, and the output-norm selection. Off restores
     the pre-H25 dispatch exactly (H14 alone, mask/shape rules unchanged).
+    Unset: on for Qwen4Exp, off for other models (see ``_switch``).
     """
-    return os.environ.get("VLLM_QWEN4EXP_GDN_H25", "1") != "0"
+    return _switch("VLLM_QWEN4EXP_GDN_H25")
 
 
 def _h25_int_env(name: str, default: int) -> int:
@@ -100,7 +123,7 @@ def h25_masked_recur_enabled() -> bool:
     state 2.4e-04, padded rows exactly zero; 5.96x @T=16, 2.84x @T=32,
     1.22x @T=64.
     """
-    return os.environ.get("VLLM_QWEN4EXP_GDN_H25_MASKED_RECUR", "1") != "0"
+    return _switch("VLLM_QWEN4EXP_GDN_H25_MASKED_RECUR")
 
 
 def h25_bf16_prefill_min_tokens() -> int:
@@ -137,7 +160,7 @@ def h26_bf16_boundary_enabled() -> bool:
 
     Kill switch: ``VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY=0`` (all-BF16 solve).
     """
-    return os.environ.get("VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY", "1") != "0"
+    return _switch("VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY")
 
 
 def h26_bf16_state_fp32() -> bool:

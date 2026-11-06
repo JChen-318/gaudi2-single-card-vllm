@@ -1756,6 +1756,14 @@ class Qwen4ExpForCausalLM(_reference.Qwen4ExpForCausalLM):
             self.quant_config.packed_modules_mapping = mapping
         self.config = config
         self.scheduler_config = vllm_config.scheduler_config
+        # The H14/H25/H26 GDN paths in the shared qwen3_5 layer were measured on
+        # this model: opt in before the layers are built. Other models (the 27B)
+        # keep their previous GDN path unless VLLM_QWEN4EXP_GDN_* asks for it.
+        from vllm_gaudi.models.qwen4exp.gdn_h14 import enable_for_qwen4exp
+        enable_for_qwen4exp()
+        # The GDN prefill graph trips a Habana bridge bug on 1.24.1 (see habana_compat).
+        from vllm_gaudi.models.qwen4exp.habana_compat import patch_fx_stack_trace
+        patch_fx_stack_trace()
         # The linear half must be the plugin's HPU GatedDeltaNet (see the
         # module docstring). Resolve it -- and therefore import qwen3_5, which
         # rebinds the vendor attribute -- *before* the decoder layers look the
