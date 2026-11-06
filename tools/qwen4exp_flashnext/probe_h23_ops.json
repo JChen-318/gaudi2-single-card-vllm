@@ -1,0 +1,113 @@
+{
+  "probe": "probe_h23_ops",
+  "lazy": "0",
+  "hpu_rms_norm_available": true,
+  "rmsnorm_indexer_q_T1": {
+    "absmax": 0.0,
+    "bit_equal": true,
+    "eager_us": 126.14113999006804,
+    "hpu_us": 33.5759500740096
+  },
+  "rmsnorm_indexer_q_T512": {
+    "absmax": 0.015625,
+    "bit_equal": false,
+    "eager_us": 131.96259998949245,
+    "hpu_us": 39.594500049133785
+  },
+  "rmsnorm_pooled_B640": {
+    "absmax": 0.0,
+    "bit_equal": true,
+    "eager_us": 123.78803992760368,
+    "hpu_us": 41.86831007245928
+  },
+  "argsort_desc_stable_equal": true,
+  "argsort_neg_us": 49.414239983889274,
+  "argsort_desc_us": 39.104280003812164,
+  "merge_T1": {
+    "bit_equal": true,
+    "two_us": 45.56927000521682,
+    "merged_us": 34.07316005905159
+  },
+  "merge_T4": {
+    "bit_equal": true,
+    "two_us": 51.74523001187481,
+    "merged_us": 34.66989001026377
+  },
+  "merge_T512": {
+    "bit_equal": true,
+    "two_us": 97.12277998914942,
+    "merged_us": 93.24962993559893
+  },
+  "select_unpadded_us": 803.255069986335,
+  "select_window2048_us": 856.7392800614471,
+  "select_score_us": 77.77755003189668,
+  "select_pack_us": 525.2646699227626,
+  "select_candidate_us": 800.0705300219124,
+  "select_candidate_identical": true,
+  "attn_decode_T1_S257": {
+    "exact_us": 228.91038002853747,
+    "fast_us": 146.8805399053963,
+    "absmax": 0.00048828125,
+    "rel": 0.003875968992248062
+  },
+  "attn_decode_T4_S257": {
+    "exact_us": 321.0794600454392,
+    "fast_us": 236.81220998696517,
+    "absmax": 0.00048828125,
+    "rel": 0.0038461538461538464
+  },
+  "attn_decode_T1_S2560_sparse": {
+    "exact_us": 455.9216599591309,
+    "fast_us": 442.458390025422,
+    "absmax": 0.000244140625,
+    "rel": 0.005263157894736842
+  },
+  "attn_prefill_T512_S512": {
+    "exact_us": 375.96491994918324,
+    "fast_us": 304.5870499772718,
+    "absmax": 0.00048828125,
+    "rel": 0.005813953488372093
+  },
+  "sync": {
+    "max_item_us": 112.06357503397157,
+    "index_item_us": 25.87037488410715,
+    "tolist_us": 14.507849846268073,
+    "big_max_us": 96.56317506596679,
+    "gemm_us": 31.775859970366582,
+    "gemm_read_us": 165.58915012865327
+  },
+  "h28_sparse_decode": {
+    "exact_us": 461.8239999884584,
+    "exact_us_second": 537.0041066877699,
+    "fast_untiled_us": 452.58660000399686,
+    "fast_untiled_us_second": 469.50880001531914,
+    "fast_tiled_us": 987.3573466514548,
+    "fast_tiled_us_second": 964.1678066691384,
+    "paired_ratio_exact_over_fast": 1.0434665353447239,
+    "paired_ratio_exact_over_tiled": 0.5430554685468604,
+    "paired_ratio_tiled_over_fast": 0.47337015014923406,
+    "tile_cols_now": 1048576,
+    "tiled_cols": 1024,
+    "absmax_exact_vs_fast": 0.000244140625,
+    "rel": 0.005847953216374269,
+    "absmax_untiled_vs_tiled": 0.000244140625
+  },
+  "h28_mrope_T1": {
+    "general_us": 484.33829004352447,
+    "equal_rows_us": 41.783399938140064,
+    "equal_rows_bit_equal": true,
+    "step_12_plain_us": 7090.844639897114,
+    "step_12_cached_us": 1.7938800010597333,
+    "step_12_compositions": 1,
+    "step_12_cached_bit_equal": true
+  },
+  "h28_mrope_T512": {
+    "general_us": 534.0576500748284,
+    "equal_rows_us": 43.70468006527517,
+    "equal_rows_bit_equal": true,
+    "step_12_plain_us": 7161.325970009784,
+    "step_12_cached_us": 1.8020700372289866,
+    "step_12_compositions": 1,
+    "step_12_cached_bit_equal": true
+  }
+}

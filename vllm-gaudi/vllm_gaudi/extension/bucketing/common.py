@@ -201,6 +201,16 @@ class HPUBucketingManager():
                                                     (t[1] >= self.slice_thld and t[1] % self.slice_size == 0)))
                 ]
                 self.log_generate_info(True)
+            from vllm_gaudi.extension import prefill_tile_replay
+            if prefill_tile_replay.enabled() and buckets_from_file is None:
+                # Eleven prefill lengths. Each step runs one attention kernel whose batch is the
+                # bundle that holds the real tiles (1..6 exact, then 8, 12, 16, 24, 32).
+                self.prompt_buckets = prefill_tile_replay.prompt_bundle_buckets(
+                    self.max_num_prefill_seqs, self.max_num_batched_tokens, self.block_size, self.max_model_len)
+                index_prompt_ctx(self.prompt_buckets, self.block_size)
+                logger().info("Prefill tile replay uses %d prompt buckets %s (context tile %s tokens)",
+                              len(self.prompt_buckets), self.prompt_buckets, prefill_tile_replay.context_tile())
+                self.log_generate_info(True)
         else:
             logger().info("Bucketing is off - skipping prompt buckets generation")
             self.prompt_buckets = []
@@ -254,6 +264,12 @@ class HPUBucketingManager():
             # (including spec decode expansions).  Prevents catastrophic
             # allocations from corrupt batch data while allowing
             # calc_fallback_value to handle moderate overflow.
+            from vllm_gaudi.extension import prefill_tile_replay
+            if prefill_tile_replay.enabled() and buckets_from_file is None:
+                self.decode_buckets = prefill_tile_replay.decode_bundle_buckets(self.block_size, self.max_model_len)
+                self.seed_decode_buckets = self.decode_buckets
+                logger().info("Prefill tile replay uses %d decode buckets %s", len(self.decode_buckets),
+                              self.decode_buckets)
             self._fallback_max_ctx = max((ctx for _, _, ctx in self.decode_buckets), default=0)
 
             self.log_generate_info(False)

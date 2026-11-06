@@ -21,6 +21,9 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
+# local perf-tool scratch output
+perf_lib_*.txt
+
 # local install and build outputs (scripts/install.sh, scripts/build_native.sh)
 /.python
 /.venv/

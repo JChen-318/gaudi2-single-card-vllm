@@ -1674,3 +1674,46 @@ a torch profiler or record_function annotation, records device events, or
 synchronizes the device. The CPU-only launcher omits HABANA_PROF_CONFIG.
 It measures host scopes including runtime waits, not module device execution.
 This staged candidate is not hot-reloaded into an already running worker.
+
+### Qwen4Exp NVFP4 resident layout
+
+`VLLM_QWEN4EXP_TPC_LAYOUT` (default `auto`) selects the resident layout the
+Qwen3.8-Flash-Next NVFP4 expert planes are loaded in. `auto` and
+`tpc_e_n_k2_v1` are the declared layout of the Track 3 decode GEMV: packed
+weights `[E, N, K/2]` uint8 with the low nibble the even K and the packed K axis
+contiguous, block scales `[E, N, K/16]` E4M3. The bytes are identical to the
+checkpoint, so this costs no HBM and no copy beyond the one the loader owns;
+the CSF scale decode happens on the host, in memory, at load time.
+`tpc_e_n_k2_pad256_v1` additionally pads every row to a whole 256-byte TPC
+vector: it keeps each 256-byte vector load inside its own row but grows the
+resident planes (the `down_proj` row goes from 320 to 512 bytes, +11.3 GiB over
+the 48 MoE layers and 512 experts), so it is opt-in. `identity` (and `VLLM_QWEN4EXP_TPC_PRESHUFFLE=0`) leaves the checkpoint
+bytes untouched. The layout is defined once in
+`vllm_gaudi/ops/nvfp4_tpc_layout.py` so the loader and the kernel cannot drift.
+
+### Qwen4Exp host-streamed PLE and QSA paths
+
+`VLLM_PLE_CPU_OFFLOAD` (default `1`) keeps the Qwen3.8-Flash-Next PLE n-gram
+tables in host RAM and streams per-token rows to the card. In this mode the
+checkpoint's 128 shard tables are mapped read-only from the safetensors files
+(no copy), the row ids are composed and gathered on the host, and only the
+decoded `tokens x 16 x head_dim` values cross to the compute device; the
+tables are never a parameter, buffer or device tensor. `0` restores the legacy
+path that copies every shard into pinned host memory. Neither mode puts a
+table in HBM.
+
+`VLLM_PLE_HOST_BUDGET_GIB` (default `32`) is the explicit host-byte budget the
+offloader charges at attach time; the checkpoint's tables are 26.82 GiB, so the
+default leaves room for the page-cache working set. A table that does not fit
+fails the load with `PLEHostBudgetExceeded` instead of half-attaching a table
+set. `VLLM_PLE_HOST_BUDGET_BYTES` sets the same budget in bytes and wins when
+both are present. The resolved budget and the measured streaming counters
+(rows gathered, host bytes read, bytes sent) are logged once per model and are
+available as `model.ple_offloader`.
+
+`VLLM_QWEN4EXP_QSA_EXACT` (default empty) overrides the QSA attention precision
+routing for the 12 full-attention layers: `1` forces the exact fp32 products on
+every step, `0` forces the BF16 GEMM path (fp32 mask/softmax) that the prefill
+buckets use by default. Unset keeps the automatic rule: every decode step and
+short prompt runs exact, and only a batch whose fp32 gathered plane would
+exceed 256 MiB takes the BF16 path.

@@ -61,7 +61,9 @@ class OnlineDefragmenter:
         self.graphed = with_default(config.VLLM_DEFRAG_WITH_GRAPHS, config.bridge_mode == 'eager')
         self.debug = init_debug_logger('defrag')
         self.kv_caches = tuple(kv_caches)
-        self.is_mla = all([cache[1] is None for cache in self.kv_caches])
+        # Mamba-style layers may expose a single state tensor (PLE short
+        # conv); treat a missing second element like MLA (no value swap).
+        self.is_mla = all([len(cache) < 2 or cache[1] is None for cache in self.kv_caches])
         self.block_size = block_size
         self.cache_utils = CacheSwapUtils(block_size, kv_caches[0][0].device)
         if self.graphed:
@@ -207,8 +209,10 @@ class OnlineDefragmenter:
         key_caches = [cache[0] for cache in self.kv_caches]
         self.cache_utils(srcs, dsts, key_caches, self.block_size)
         if not self.is_mla:
-            value_caches = [cache[1] for cache in self.kv_caches]
-            self.cache_utils(srcs, dsts, value_caches, self.block_size)
+            # Single-state (short-conv) layers contribute no value tensor.
+            value_caches = [cache[1] for cache in self.kv_caches if len(cache) > 1 and cache[1] is not None]
+            if value_caches:
+                self.cache_utils(srcs, dsts, value_caches, self.block_size)
 
     def warmup(self):
         """Warm up defragmentation swap graphs for different thresholds.

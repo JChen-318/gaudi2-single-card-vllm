@@ -934,7 +934,7 @@ def maybe_set_mamba_kv_cache_groups_ids(model, kv_cache_config: KVCacheConfig):
 
     mamba_like_arch = [
         "GraniteMoeHybridForCausalLM", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration",
-        "Qwen3NextForCausalLM", "NemotronHForCausalLM"
+        "Qwen3NextForCausalLM", "NemotronHForCausalLM", "Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM"
     ]
     if not any(arch in getattr(model.config, 'architectures', []) for arch in mamba_like_arch):
         return
@@ -5467,6 +5467,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             load_indices_tensor = async_h2d_copy(load_state_indices_cpu, device=self.device)
             store_indices_tensor = async_h2d_copy(store_state_indices_cpu, device=self.device)
             query_start_loc_p = async_h2d_copy(query_start_loc_p_cpu, dtype=torch.int32)
+            if os.environ.get("VLLM_QWEN4EXP_DECODE_GRAPH", "0") not in ("", "0"):
+                from vllm_gaudi.models.qwen4exp import decode_graph
+                decode_graph.publish_host_state_indices(load_state_indices_cpu)
             if is_dflash_decode:
                 accepted_counts.extend([1] * (padded_batch_size - num_decodes))
                 num_accepted_tokens = async_h2d_copy(
@@ -5861,6 +5864,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                                model_mm_kwargs=None,
                                fuse_greedy_sampling=False):
         # FORWARD.
+        self._publish_prefill_tile_lengths(attn_metadata)
         batch_size = token_ids.size(0)
         framework_attn_metadata = isinstance(attn_metadata, Mapping)
         if framework_attn_metadata:
@@ -5914,12 +5918,15 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             # it immediately before the call preserves the existing lifetime.
             LoraMask.setLoraMask(lora_mask)
             with mtp_phase('target_model_forward'):
+                qsl = (None if framework_attn_metadata else getattr(
+                    trimmed_attn_metadata, "query_start_loc", None))
                 hidden_states = self.model.forward(input_ids=token_ids,
                                                    positions=position_ids,
                                                    attn_metadata=trimmed_attn_metadata,
                                                    kv_caches=kv_caches,
                                                    inputs_embeds=inputs_embeds,
                                                    model_mm_kwargs=model_mm_kwargs,
+                                                   query_start_loc=qsl,
                                                    **additional_kwargs)
         if quality_debug and isinstance(hidden_states, torch.Tensor):
             hidden_flat = hidden_states.reshape(-1, hidden_states.shape[-1]).float()
@@ -6432,6 +6439,222 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         self.defragmenter.update_state(new | cached, scheduler_output.finished_req_ids)
         self.defragmenter.defragment()
 
+    def _log_graph_compilations(self, scheduler_output: "SchedulerOutput") -> None:
+        """``VLLM_HPU_COMPILE_LOG=1``: one line per step that compiled Synapse recipes (H31 diagnostics).
+
+        Covers what ``TORCH_LOGS=recompiles`` cannot see: recipes the bridge compiles without a
+        Dynamo guard failure. The lines describe the previous step (this runs at step start).
+        """
+        from habana_frameworks.torch.hpu.metrics import metric_global
+
+        metric = metric_global("graph_compilation")
+        stats = dict(metric.stats())
+        names = list(getattr(metric, "_recipe_names", []))
+        durations = list(getattr(metric, "_recipe_durations", []))
+        for attr in ("_recipe_names", "_recipe_durations"):
+            if hasattr(metric, attr):
+                getattr(metric, attr).clear()
+        metric.reset()
+        count = int(stats.get("TotalNumber", len(names)))
+        if count:
+            slowest = sorted(zip(durations, names), reverse=True)[:3]
+            logger.info("compile before step (next tokens %d): %d recipes, %.1f ms; slowest %s",
+                        scheduler_output.total_num_scheduled_tokens, count,
+                        float(stats.get("TotalTime", sum(durations))) / 1000.0,
+                        [(n[:80], round(d / 1000.0, 1)) for d, n in slowest])
+
+    def _short_conv_state_is_unused(self, spec) -> bool:
+        """The Qwen4Exp PLE layer's short-conv spec: its conv state lives in the layer, not in these pages."""
+        if not isinstance(spec, MambaSpec) or not self._paged_kv_is_virtual():
+            return False
+        kind = getattr(spec.mamba_type, "value", spec.mamba_type)
+        return str(getattr(spec.mamba_type, "name", kind)).lower() == "short_conv" or str(kind).lower() == "short_conv"
+
+    def _paged_kv_is_virtual(self) -> bool:
+        """Qwen4Exp QSA: the paged attention KV is never touched (``VLLM_QWEN4EXP_VIRTUAL_PAGED_KV``, default 1)."""
+        if os.environ.get("VLLM_QWEN4EXP_VIRTUAL_PAGED_KV", "1") == "0":
+            return False
+        if os.environ.get("VLLM_QWEN4EXP_SKIP_PAGED_METADATA", "1") == "0":
+            return False
+        config = self.model_config
+        # The defragmenter (contiguous PA) and prefix caching copy pages; a write into the expanded
+        # one-element tensors would raise, so either one keeps the real allocation.
+        return (config.hf_config.model_type == "qwen4_exp"
+                and getattr(config.hf_text_config, "indexer_n_heads", None) is not None
+                and self.speculative_config is None and not self.cache_config.enable_prefix_caching
+                and not getattr(self, "use_contiguous_pa", False))
+
+    def _install_mem_module_hooks(self, sync: bool = False) -> None:
+        """``VLLM_HPU_MEM_LOG_PREFILL=2``: per decoder-layer child, the largest transient above its start.
+
+        ``=3`` synchronizes the card before and after each child, so queued work of the previous
+        module does not show up in the next one (diagnostics only: it serializes host and card).
+        """
+        import re
+
+        self._mem_module_peaks: dict[str, int] = {}
+        self._mem_module_times: dict[str, float] = {}
+        pattern = re.compile(r"layers\.(\d+)\.([A-Za-z_]+)$")
+        for name, module in self.model.named_modules():
+            match = pattern.search(name)
+            if match is None:
+                continue
+            label = f"{type(module).__name__}.{match.group(2)}"
+
+            def pre(_module, _args, _label=label):
+                if sync:
+                    torch.hpu.synchronize()
+                torch.hpu.reset_peak_memory_stats()
+                _module._mem_start = torch.hpu.memory_allocated()
+                _module._time_start = time.perf_counter()
+
+            def post(_module, _args, _out, _label=label):
+                if sync:
+                    torch.hpu.synchronize()
+                    # Synchronized at both ends, so this is the module's card time plus host gaps.
+                    times = self._mem_module_times
+                    times[_label] = times.get(_label, 0.0) + time.perf_counter() - _module._time_start
+                delta = torch.hpu.max_memory_allocated() - getattr(_module, "_mem_start", 0)
+                peaks = self._mem_module_peaks
+                peaks[_label] = max(peaks.get(_label, 0), delta)
+
+            module.register_forward_pre_hook(pre)
+            module.register_forward_hook(post)
+        logger.info("mem prefill module hooks installed")
+
+    def _dump_live_device_tensors(self) -> None:
+        """``VLLM_HPU_MEM_DUMP_FILE=path``: when that file appears, log live device storages by owner (H31)."""
+        import gc
+        from collections import defaultdict
+
+        owners: dict[int, str] = {}
+        model = self.model
+        for name, tensor in list(model.named_parameters()) + list(model.named_buffers()):
+            owners.setdefault(tensor.untyped_storage().data_ptr(), "param/buffer")
+        for mod_name, module in model.named_modules():
+            for key, value in vars(module).items():
+                if isinstance(value, torch.Tensor) and value.device.type == "hpu":
+                    owners.setdefault(value.untyped_storage().data_ptr(), f"attr {type(module).__name__}.{key}")
+        objects = gc.get_objects()
+        for obj in objects:
+            if type(obj).__name__ == "_QSASlot":
+                for key, value in vars(obj).items():
+                    if isinstance(value, torch.Tensor):
+                        owners.setdefault(value.untyped_storage().data_ptr(), f"QSA slot {key}")
+        seen: dict[int, tuple[int, str]] = {}
+        for obj in objects:
+            try:
+                if not isinstance(obj, torch.Tensor) or obj.device.type != "hpu":
+                    continue
+                storage = obj.untyped_storage()
+                ptr = storage.data_ptr()
+                if ptr in seen:
+                    continue
+                label = owners.get(ptr) or f"other {tuple(obj.shape)} {obj.dtype}"
+                seen[ptr] = (storage.nbytes(), label)
+            except Exception:  # noqa: BLE001 - some tensors refuse storage access
+                continue
+        groups: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for nbytes, label in seen.values():
+            groups[label][0] += nbytes
+            groups[label][1] += 1
+        total = sum(v[0] for v in groups.values())
+        logger.info("mem dump: %d live storages, %.2f GiB (allocator says %.2f GiB)", len(seen), total / 2**30,
+                    torch.hpu.memory_allocated() / 2**30)
+        for label, (nbytes, count) in sorted(groups.items(), key=lambda kv: -kv[1][0])[:40]:
+            logger.info("mem dump: %8.3f GiB  x%-5d %s", nbytes / 2**30, count, label)
+        try:
+            from habana_frameworks.torch.hpu import memory as _hpu_memory
+
+            logger.info("mem dump stats: %s", dict(torch.hpu.memory_stats()))
+            logger.info("mem dump extended: %s", _hpu_memory._extended_memory_summary_dict())
+        except Exception as exc:  # noqa: BLE001 - diagnostics only
+            logger.info("mem dump stats unavailable: %s", exc)
+        # Who holds the large unowned storages: two levels of referrers, by type and key.
+        if os.environ.get("VLLM_HPU_MEM_DUMP_REFERRERS", "0") != "0":
+            reported = 0
+            for obj in objects:
+                if reported >= 6:
+                    break
+                try:
+                    if (not isinstance(obj, torch.Tensor) or obj.device.type != "hpu"
+                            or obj.untyped_storage().nbytes() < (32 << 20)
+                            or obj.untyped_storage().data_ptr() in owners):
+                        continue
+                except Exception:  # noqa: BLE001
+                    continue
+                reported += 1
+                chain = []
+                for ref in gc.get_referrers(obj):
+                    if ref is objects:
+                        continue
+                    desc = type(ref).__name__
+                    if isinstance(ref, dict):
+                        keys = [k for k, v in ref.items() if v is obj][:2]
+                        holders = [type(h).__name__ for h in gc.get_referrers(ref) if h is not objects][:4]
+                        desc += f" key={keys} held by {holders}"
+                    elif isinstance(ref, (list, tuple)):
+                        holders = [type(h).__name__ for h in gc.get_referrers(ref) if h is not objects][:4]
+                        desc += f" len={len(ref)} held by {holders}"
+                    chain.append(desc)
+                logger.info("mem dump referrers of %s %s: %s", tuple(obj.shape), obj.dtype, chain[:6])
+
+    def _log_device_memory(self, scheduler_output: "SchedulerOutput") -> None:
+        """``VLLM_HPU_MEM_LOG=N``: log allocator state every N steps (H31 memory breakdown)."""
+        every = getattr(self, "_mem_log_every", None)
+        if every is None:
+            every = int(os.environ.get("VLLM_HPU_MEM_LOG", "0") or 0)
+            self._mem_log_every = every
+            self._mem_log_step = 0
+            self._compile_log = os.environ.get("VLLM_HPU_COMPILE_LOG", "0") not in ("", "0")
+            self._mem_prefill_log = os.environ.get("VLLM_HPU_MEM_LOG_PREFILL", "0") not in ("", "0")
+            self._mem_prev = None
+            self._mem_dump_file = os.environ.get("VLLM_HPU_MEM_DUMP_FILE", "")
+        if self._compile_log:
+            self._log_graph_compilations(scheduler_output)
+        gib = 2**30
+        if self._mem_prefill_log:
+            # The previous step's peak above its starting allocation: what one prefill chunk needs.
+            if self._mem_prev is not None and self._mem_prev[0] > 1:
+                logger.info("mem prefill chunk %d tokens: start %.2f GiB, peak %.2f GiB (+%.2f)",
+                            self._mem_prev[0], self._mem_prev[1] / gib, torch.hpu.max_memory_allocated() / gib,
+                            (torch.hpu.max_memory_allocated() - self._mem_prev[1]) / gib)
+                peaks = getattr(self, "_mem_module_peaks", None)
+                if peaks:
+                    top = sorted(peaks.items(), key=lambda kv: -kv[1])[:8]
+                    logger.info("mem prefill modules (peak above module start, GiB): %s",
+                                ", ".join(f"{name} {value / gib:.2f}" for name, value in top))
+                from vllm_gaudi.models.qwen4exp import qsa as _qsa_mod
+
+                if _qsa_mod.QSA_STAGE_TIMES:
+                    logger.info("time prefill qsa stages (ms, 12 layers): %s", ", ".join(
+                        f"{name} {value * 1000:.0f}" for name, value in _qsa_mod.QSA_STAGE_TIMES.items()))
+                    _qsa_mod.QSA_STAGE_TIMES.clear()
+                times = getattr(self, "_mem_module_times", None)
+                if times:
+                    logger.info("time prefill modules (ms, all layers): %s",
+                                ", ".join(f"{name} {value * 1000:.0f}" for name, value in
+                                          sorted(times.items(), key=lambda kv: -kv[1])))
+            if getattr(self, "_mem_module_peaks", None) is not None:
+                self._mem_module_peaks.clear()
+                self._mem_module_times.clear()
+            elif os.environ.get("VLLM_HPU_MEM_LOG_PREFILL") in ("2", "3"):
+                self._install_mem_module_hooks(sync=os.environ.get("VLLM_HPU_MEM_LOG_PREFILL") == "3")
+            torch.hpu.reset_peak_memory_stats()
+            self._mem_prev = (scheduler_output.total_num_scheduled_tokens, torch.hpu.memory_allocated())
+        if self._mem_dump_file and os.path.exists(self._mem_dump_file):
+            os.unlink(self._mem_dump_file)
+            self._dump_live_device_tensors()
+        if every <= 0:
+            return
+        self._mem_log_step += 1
+        if self._mem_log_step % every:
+            return
+        logger.info("mem step %d tokens %d: allocated %.2f GiB, reserved %.2f GiB, peak allocated %.2f GiB",
+                    self._mem_log_step, scheduler_output.total_num_scheduled_tokens,
+                    torch.hpu.memory_allocated() / gib, torch.hpu.memory_reserved() / gib,
+                    torch.hpu.max_memory_allocated() / gib)
+
     @torch.inference_mode()
     @profile_stage('cpu_scheduler_state_update')
     def execute_model(
@@ -6447,6 +6670,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         self.run_defragmenter(scheduler_output, warmup_mode)
 
         batch_changed = self._update_states(scheduler_output)
+        self._log_device_memory(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group() or warmup_mode:
                 # Return empty ModelRunnerOuptut if there's no work to do.
@@ -7765,8 +7989,31 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             compiled = kiro_v11.protect(compiled, self._guard_skip)
         return compiled
 
+    def _publish_prefill_tile_lengths(self, attn_metadata) -> None:
+        """Real query and context lengths for the host tile loop.
+
+        These stay Python ints. Putting them in the hashed attention metadata would capture a new HPU graph per value.
+        """
+        from vllm_gaudi.extension import prefill_tile_replay
+
+        prefill_tile_replay.clear_real_lengths()
+        if not prefill_tile_replay.enabled() or attn_metadata is None or isinstance(attn_metadata, Mapping):
+            return
+        if not getattr(attn_metadata, "is_prompt", False):
+            return
+        query = getattr(attn_metadata, "seq_lens_tensor", None)
+        context = getattr(attn_metadata, "context_lens_tensor", None)
+        if query is None or context is None or query.numel() != 1 or context.numel() != 1:
+            return
+        prefill_tile_replay.set_real_lengths(int(query.flatten()[0].item()), int(context.flatten()[0].item()))
+
     def _use_graphs(self, attn_metadata, batch_size):
         if self.model_config.enforce_eager:
+            return False
+        from vllm_gaudi.extension import prefill_tile_replay
+        # The tile loop has to stay outside the captured model graph. Capturing the whole prompt forward would bake
+        # the trip count.
+        if prefill_tile_replay.enabled() and attn_metadata is not None and getattr(attn_metadata, "is_prompt", False):
             return False
         # skip HPU graphs for long (query + context) prefills
         if attn_metadata is not None and attn_metadata.is_prompt:
@@ -9603,6 +9850,13 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             dtype: torch.dtype,
             layer_pos: int,
         ) -> tuple[torch.Tensor, torch.Tensor]:
+            if self._paged_kv_is_virtual():
+                # H31: Qwen4Exp's QSA keeps its own cache and never reads or writes these pages, which
+                # cost 3.5 MB per scheduler block (2.7 GiB at 768 blocks, 13 GiB for one 262K request).
+                # A one-element tensor expanded to the page shape keeps every shape and index valid;
+                # a write into it raises instead of landing anywhere.
+                return (torch.zeros(1, dtype=dtype, device=self.device).expand(shape),
+                        torch.zeros(1, dtype=dtype, device=self.device).expand(shape))
             numel = math.prod(shape)
             key = (layer_pos, dtype, numel)
             tensors = attention_state_cache.get(key)
@@ -9671,6 +9925,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                         continue
                     if isinstance(spec, MambaSpec) and \
                             spec.mamba_type in _GDN_MAMBA_TYPES:
+                        continue
+                    if self._short_conv_state_is_unused(spec):
                         continue
                     if isinstance(spec, MambaSpec) and len(set(spec.dtypes)) > 1:
                         # Mixed-dtype standard Mamba2 (e.g. Nemotron-H: bf16
@@ -9761,6 +10017,13 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                         # GDN/linear_attention: non-compact (baseline) allocation
                         # using contiguous tensors with num_blocks+1 slots.
                         kv_caches[layer_name] = _mamba_state_tensors(kv_cache_spec, layer_pos, num_blocks + 1)
+                    elif self._short_conv_state_is_unused(kv_cache_spec):
+                        # H31: Qwen4Exp's PLE conv keeps its own per-request state; these pages would cost
+                        # one attention page per scheduler block (7 GiB at 4,096 blocks). Shapes stay valid,
+                        # a write raises.
+                        kv_caches[layer_name] = tuple(
+                            torch.zeros(1, dtype=dtype, device=self.device).expand(num_blocks + 1, *shape)
+                            for shape, dtype in zip(kv_cache_spec.shapes, kv_cache_spec.dtypes))
                     elif isinstance(kv_cache_spec, MambaSpec) and \
                             len(set(kv_cache_spec.dtypes)) > 1:
                         # Mixed-dtype standard Mamba2 (e.g. Nemotron-H: bf16
@@ -11065,6 +11328,11 @@ class HPUAttentionMetadataProcessor:
         if (attn_metadata is None or (self.prefill_use_fusedsdpa and attn_metadata.block_list is None)
                 or not attn_metadata.is_prompt):
             return attn_metadata
+        # Tile replay builds an 8192-wide mask. This bucket mask is the full padded context
+        # (1 GiB at 2048 x 262144, bf16) and the tiled kernel does not read it.
+        from vllm_gaudi.extension import prefill_tile_replay
+        if prefill_tile_replay.enabled():
+            return attn_metadata
 
         if attn_metadata.attn_bias is not None:
             return attn_metadata
@@ -11321,6 +11589,20 @@ class HPUAttentionMetadataProcessor:
                                             attn_bias=attn_bias)
         return metadata
 
+    def _attention_ignores_paged_metadata(self) -> bool:
+        """Qwen4Exp's QSA keeps its own software cache and reads no masks or block mappings.
+
+        Building them anyway costs about 100 launches per decode step, one set per attention group.
+        """
+        ignored = getattr(self, "_ignores_paged_metadata", None)
+        if ignored is None:
+            config = self.vllm_config.model_config
+            ignored = (os.environ.get("VLLM_QWEN4EXP_SKIP_PAGED_METADATA", "1") != "0"
+                       and config.hf_config.model_type == "qwen4_exp"
+                       and getattr(config.hf_text_config, "indexer_n_heads", None) is not None)
+            self._ignores_paged_metadata = ignored
+        return ignored
+
     def process_metadata(self,
                          attn_metadata: HPUAttentionMetadataV1,
                          batch_size: int,
@@ -11346,6 +11628,8 @@ class HPUAttentionMetadataProcessor:
         Returns:
             Post-processed attention metadata with additional tensors
         """
+        if self._attention_ignores_paged_metadata():
+            return attn_metadata
         main_block_usage = attn_metadata.block_usage
         main_block_groups = attn_metadata.block_groups
         if attn_metadata.is_prompt:

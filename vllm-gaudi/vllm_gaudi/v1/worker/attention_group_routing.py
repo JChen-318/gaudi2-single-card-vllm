@@ -18,6 +18,17 @@ def _live_page(table: list[int], logical_page: int, pad_block: int) -> int:
     return page
 
 
+def _live_pages(table: torch.Tensor, logical_pages: torch.Tensor, pad_block: int) -> torch.Tensor:
+    if logical_pages.numel() == 0:
+        return logical_pages
+    if int(logical_pages.min()) < 0 or int(logical_pages.max()) >= table.numel():
+        raise IndexError("Attention group block table does not cover scheduled tokens")
+    pages = table[logical_pages]
+    if int(pages.min()) < 0 or int(pages.max()) >= pad_block:
+        raise IndexError("A live attention token cannot address a padding or out-of-range page")
+    return pages
+
+
 def prefill_group_addresses(tables: list[list[int]], context_lens: list[int], query_lens: list[int],
                             padded_batch: int, padded_query: int, padded_context_pages: int,
                             block_size: int, pad_block: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -32,12 +43,12 @@ def prefill_group_addresses(tables: list[list[int]], context_lens: list[int], qu
         context_count = (start + block_size - 1) // block_size
         if context_count > padded_context_pages:
             raise ValueError("Prefill context page bucket is too small")
-        for logical_page in range(context_count):
-            context[row, logical_page] = _live_page(table, logical_page, pad_block)
-        for token in range(length):
-            position = start + token
-            page = _live_page(table, position // block_size, pad_block)
-            slots[row, token] = page * block_size + position % block_size
+        # Runs once per attention group per prefill chunk, so a per-token Python loop here
+        # costs about 200 ms of idle device time for every 2048-token chunk.
+        pages = torch.as_tensor(table, dtype=torch.int64)
+        context[row, :context_count] = _live_pages(pages, torch.arange(context_count), pad_block).to(torch.int32)
+        positions = torch.arange(start, start + length)
+        slots[row, :length] = _live_pages(pages, positions // block_size, pad_block) * block_size + positions % block_size
     return slots, context.flatten()
 
 

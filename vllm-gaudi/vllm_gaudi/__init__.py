@@ -154,7 +154,24 @@ def register_ops():
         register_hpu_lora_layers()
 
 
+def register_configs():
+    """Make the Qwen4Exp checkpoint config parseable by transformers.
+
+    The checkpoint targets transformers 5.8-dev; without this registration
+    AutoConfig rejects model_type "qwen4_exp" during config parsing.
+    """
+    try:
+        from vllm_gaudi.models.qwen4exp.hf_config import register_qwen4exp_configs
+
+        register_qwen4exp_configs()
+    except Exception as exc:  # pragma: no cover - never break plugin load
+        import warnings
+
+        warnings.warn(f"Failed to register Qwen4Exp HF configs: {exc}", stacklevel=2)
+
+
 def register_models():
+    register_configs()
     import vllm_gaudi.models.utils  # noqa: F401
     import vllm_gaudi.models.interfaces  # noqa: F401
     import vllm_gaudi.models.bert  # noqa: F401

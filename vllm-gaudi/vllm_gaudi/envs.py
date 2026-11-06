@@ -1964,6 +1964,11 @@ environment_variables["VLLM_HPU_PROMPT_FINE_CTX_MIN"] = lambda: int(os.environ.g
 # into one batched FusedSDPA call (extension/prefill_split_attn.py; read in extension/ops.py).
 environment_variables["VLLM_HPU_PREFILL_SPLIT_ATTN"] = lambda: os.environ.get(
     "VLLM_HPU_PREFILL_SPLIT_ATTN", "0").lower() in ("1", "true")
+# Host replays one fixed-size attention tile per real context chunk. Prompt warmup keeps a single padded bucket,
+# and prompt forwards skip the outer HPU graph so the trip count is not captured. Default off.
+environment_variables["VLLM_HPU_PREFILL_TILE_REPLAY"] = lambda: os.environ.get(
+    "VLLM_HPU_PREFILL_TILE_REPLAY", "0").lower() in ("1", "true")
+environment_variables["VLLM_HPU_PREFILL_CTX_TILE"] = lambda: int(os.environ.get("VLLM_HPU_PREFILL_CTX_TILE", "8192"))
 # Engine thread on its own physical core after warmup (cpu id; -1 = off).
 environment_variables["VLLM_HPU_PIN_MAIN_CPU"] = lambda: int(os.environ.get("VLLM_HPU_PIN_MAIN_CPU", "-1"))
 # Diagnostics: step-timer marks after the model entry region and every decoder group.

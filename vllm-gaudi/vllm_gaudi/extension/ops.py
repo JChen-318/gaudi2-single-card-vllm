@@ -697,10 +697,122 @@ def _fsdpa_prompt_attention(query: torch.Tensor,
     return attn_weights
 
 
+def _tile_replay_applies(args) -> bool:
+    from vllm_gaudi.extension import prefill_tile_replay
+
+    if not prefill_tile_replay.enabled() or prefill_tile_replay.real_lengths() is None:
+        return False
+    if args.get('sinks') is not None or args.get('window_size') is not None:
+        return False
+    if args.get('k_scales') is not None or args.get('v_scales') is not None:
+        return False
+    query = args.get('query')
+    key = args.get('key')
+    block_size = args.get('block_size')
+    if query is None or key is None or query.shape[0] != 1 or key.shape[0] != 1:
+        return False
+    if not isinstance(block_size, int) or block_size <= 0:
+        return False
+    tile = prefill_tile_replay.context_tile()
+    if tile % block_size != 0:
+        return False
+    real_q, real_ctx = prefill_tile_replay.real_lengths()
+    if real_ctx <= 0:
+        return True
+    block_list = args.get('block_list')
+    n_blocks = tile // block_size
+    return block_list is not None and block_list.numel() >= n_blocks and real_q > 0
+
+
+def _fetch_block_tile(fetch, cache, block_ids, block_size):
+    past = fetch(cache.unflatten(0, (-1, block_size)), **get_kv_fetch_extra_args(blocks=block_ids))
+    return past.reshape(1, -1, past.shape[-2], past.shape[-1])
+
+
+@torch.compiler.disable
+def _prompt_attention_host(**args) -> torch.Tensor:
+    """Keep the prefill trip count out of ``torch.compile``.
+
+    This server runs eager mode (``PT_HPU_LAZY_MODE=0``) and compiles each decoder layer.
+    ``mark_step`` does not leave that region. A compiled layer that reads the trip count
+    specializes a new graph per context length.
+    """
+    if _tile_replay_applies(args):
+        return _tiled_prompt_attention(**args)
+    _get_context(args)
+    return _fsdpa_prompt_attention(**args)
+
+
+def _tiled_prompt_attention(**args) -> torch.Tensor:
+    """Replay one fixed context tile per real context chunk, then the query's own causal tile.
+
+    The block-id window is sliced on the host, so the device sees a fixed-length id tensor on every
+    iteration. ``mark_step`` ends a lazy graph between iterations. The trip count stays in Python.
+    """
+    import habana_frameworks.torch.core as htcore
+
+    from vllm_gaudi.extension import prefill_tile_replay
+
+    real_q, real_ctx = prefill_tile_replay.real_lengths()
+    tile = prefill_tile_replay.context_tile()
+    block_size = args['block_size']
+    n_blocks = tile // block_size
+    block_list = args['block_list'].flatten().detach()
+    if block_list.device.type != 'cpu':
+        block_list = block_list.to('cpu')
+    query = args['query'].transpose(1, 2)
+    key_q = args['key'].transpose(1, 2)
+    value_q = args['value'].transpose(1, 2)
+    scale = args['scale']
+    softmax_mode = 'fp32' if get_config().fp32_softmax else 'fast'
+    id_device = args['key_cache'].device
+
+    def load_ctx_tile(tile_index):
+        start = tile_index * n_blocks
+        # 2032 context blocks is not a multiple of the 64-block tile. Pad the tail with 0
+        # so every device copy stays n_blocks long; valid_k masks those columns.
+        window = prefill_tile_replay.pad_block_window(block_list, start, n_blocks)
+        block_ids = window.to(id_device)
+        block_ids = torch.where(block_ids < 0, torch.zeros_like(block_ids), block_ids)
+        key = _fetch_block_tile(args['keys_fetch_func'], args['key_cache'], block_ids, block_size).transpose(1, 2)
+        value = _fetch_block_tile(args['values_fetch_func'], args['value_cache'], block_ids, block_size).transpose(1, 2)
+        available = max(block_list.numel() - start, 0) * block_size
+        valid = min(tile, max(real_ctx - tile_index * tile, 0), available)
+        return key, value, valid
+
+    def sdpa(q, k, v, bias, scale_, softmax_mode_):
+        from habana_frameworks.torch.hpex.kernels.FusedSDPA import gqa_input_reshape_fwd, gqa_output_reshape, is_gqa
+        gqa = is_gqa(q, k)
+        if gqa:
+            q, k, v, bias = gqa_input_reshape_fwd(q, k, v, bias)
+        out, row_max, normalizer = torch.ops.hpu.sdpa_recomp_fwd(q, k, v, bias, 0.0, scale_, False, True,
+                                                                 softmax_mode_, None, 'right')[:3]
+        if gqa:
+            out, row_max, normalizer = (gqa_output_reshape(t) if t.dim() == 5 else t
+                                        for t in (out, row_max, normalizer))
+        return out, row_max.to(torch.float32), normalizer.to(torch.float32)
+
+    out = prefill_tile_replay.run_bundled_attention(query,
+                                                  prefill_tile_replay.context_tile_count(real_ctx, tile),
+                                                  load_ctx_tile,
+                                                  key_q,
+                                                  value_q,
+                                                  real_q,
+                                                  sdpa,
+                                                  htcore.mark_step,
+                                                  scale,
+                                                  softmax_mode)
+    return out.transpose(1, 2)
+
+
 def prompt_attention(
     impl: str,
     **args,
 ) -> torch.Tensor:
+    if impl == 'fsdpa_impl':
+        from vllm_gaudi.extension import prefill_tile_replay
+        if prefill_tile_replay.enabled():
+            return _prompt_attention_host(**args)
     _get_context(args)
     impl_mapping = {
         'naive_impl': _naive_prompt_attention,
