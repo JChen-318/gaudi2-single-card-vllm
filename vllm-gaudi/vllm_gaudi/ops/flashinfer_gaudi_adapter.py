@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 from flashinfer_gaudi._config import bridge_auto_enabled, get_backend_policy
@@ -20,6 +22,10 @@ _BACKEND_POLICY = get_backend_policy()
 _PUBLIC_AUTO_PROMOTED = public_gdn_auto_promoted()
 _BRIDGE_AUTO_ENABLED = bridge_auto_enabled()
 _GDN_PREFILL_TACTIC = gdn_prefill_tactic()
+# VLLM_HPU_GDN_PREFILL_COMPUTE_DTYPE=bfloat16 runs the tactic's chunk products in BF16; the tactic keeps the
+# triangular solve and the recurrent state in FP32. One 27B layer at 2048 tokens: 2.36 -> 1.98 ms, output
+# rel_l2 5e-3 against the FP32 tactic (docs/OPTIMIZATION.md section 22). Empty = the tactic's own dtype.
+_GDN_PREFILL_COMPUTE_DTYPE = os.environ.get("VLLM_HPU_GDN_PREFILL_COMPUTE_DTYPE", "").strip().lower()
 _GDN_FUSED_DECODE_TACTIC = gdn_fused_decode_tactic()
 _GDN_FUSED_DECODE_MODEL_SHAPE = _GDN_FUSED_DECODE_TACTIC.get("model_shape", {})
 _GDN_FUSED_DECODE_BATCHES = frozenset(
@@ -104,7 +110,7 @@ def maybe_run_gdn_prefill(
     compute_dtype = {
         "bfloat16": torch.bfloat16,
         "float32": torch.float32,
-    }.get(tuning.get("compute_dtype"))
+    }.get(_GDN_PREFILL_COMPUTE_DTYPE or tuning.get("compute_dtype"))
     if compute_dtype is None:
         return None
     return _chunk_gated_delta_rule_log_gate(

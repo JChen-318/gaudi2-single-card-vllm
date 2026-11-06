@@ -110,6 +110,9 @@ else
   ARGS+=(--limit-mm-per-prompt '{"image": 0, "video": 0}')
 fi
 
+GDN_PREFILL_DTYPE=
+[ "${GDN_PREFILL_BF16:-0}" = 1 ] && GDN_PREFILL_DTYPE=bfloat16
+
 CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HABANA_PROF_CONFIG
   PATH="/opt/habanalabs/bin:$PATH"
   PYTHONPATH="$ROOT/vllm-gaudi"
@@ -146,6 +149,9 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   # off; GDN_FUSED_RMSNORM=1 (default) uses the fused gated RMSNorm (faster, changes the output bits; 0 = exact)
   VLLM_QWEN4EXP_GDN_H25="${GDN_PREFILL_H25:-0}" VLLM_QWEN4EXP_GDN_H26_BF16_BOUNDARY="${GDN_PREFILL_H25:-0}"
   VLLM_GDN_FUSED_RMSNORM_GATED="${GDN_FUSED_RMSNORM:-1}"
+  # GDN_PREFILL_BF16=1: the FlashInfer GDN prefill tactic (the path this model takes) computes its chunk products
+  # in BF16, solve and state stay FP32 (section 22)
+  VLLM_HPU_GDN_PREFILL_COMPUTE_DTYPE="$GDN_PREFILL_DTYPE"
   # full attention over the whole context per request: KV gathered once, FP8 matmuls, one softmax (section 17)
   VLLM_HPU_SHARED_PREFIX_ATTN=dense VLLM_HPU_DENSE_ATTN_QK=fp8 VLLM_HPU_DENSE_ATTN_AV=fp8
   # single-request decode from 32K tokens on reads a contiguous per-layer KV copy instead of gathering the pages
