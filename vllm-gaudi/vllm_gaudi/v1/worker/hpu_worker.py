@@ -948,7 +948,9 @@ class HPUWorker(WorkerBase):
 
             elif isinstance(layer_spec, MambaSpec):
                 dtype0 = layer_spec.dtypes[0]
-                dtype1 = layer_spec.dtypes[1]
+                # GDN carries (conv, ssm); short-conv layers (PLE) carry a
+                # single conv state, so reuse dtype0 for both placeholders.
+                dtype1 = layer_spec.dtypes[1] if len(layer_spec.dtypes) > 1 else dtype0
 
                 # Use an empty tensor instead of `None`` to force Dynamo to pass
                 # it by reference, rather by specializing on the value ``None``.

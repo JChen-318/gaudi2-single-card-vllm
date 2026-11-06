@@ -1,0 +1,379 @@
+{
+  "unit": "H18 Step 2 / Part 2 (Direction 2-A: prefill MoE HBM round trip)",
+  "checkpoint": "~/models/qwen4exp-flashnext-plain",
+  "layer": "model.language_model.layers.0.mlp",
+  "lazy_mode": "1",
+  "geometry": {
+    "hidden": 2560,
+    "num_experts": 512,
+    "top_k": 10,
+    "moe_inter": 640,
+    "bf16_MiB_per_expert_all_3_proj": 9.375
+  },
+  "note": "'regimes' are routed-MoE-only (dequant + bucket + bmm) at real Layer-0 routing; 'block' is the production Qwen4ExpSparseMoeBlock (router + routed + shared). All candidate rows are compared with the H9(a) baseline on the same weights/inputs in one process.",
+  "block": {
+    "T=512": {
+      "before_sync_ms": 23.363122998489416,
+      "after_sync_ms": 22.569781000129296,
+      "after_batched_ms": 22.274733666563407,
+      "before_peak_MiB": 5792.4405517578125,
+      "after_peak_MiB": 4434.68505859375,
+      "accuracy": {
+        "cosine": 0.9999133944511414,
+        "rel_max": 0.0,
+        "rel_rms": 0.0,
+        "bf16_bit_diff": 0,
+        "bf16_elements": 1310720
+      },
+      "checksum_before": 277.44287109375,
+      "checksum_after": 277.44287109375
+    },
+    "T=2048": {
+      "before_sync_ms": 30.71733199976734,
+      "after_sync_ms": 25.78094999989844,
+      "after_batched_ms": 24.629667666279904,
+      "before_peak_MiB": 8816.181396484375,
+      "after_peak_MiB": 4554.77880859375,
+      "accuracy": {
+        "cosine": 0.9999592304229736,
+        "rel_max": 0.0,
+        "rel_rms": 0.0,
+        "bf16_bit_diff": 0,
+        "bf16_elements": 5242880
+      },
+      "checksum_before": 1152.025634765625,
+      "checksum_after": 1152.025634765625
+    }
+  },
+  "regimes": {
+    "T=512": {
+      "routing": {
+        "slots": 5120,
+        "unique": 427,
+        "cap_single": 136,
+        "count_p50": 5.0,
+        "count_max": 136,
+        "count_min": 1,
+        "top5_counts": [
+          136,
+          121,
+          114,
+          104,
+          102
+        ],
+        "experts_count_le_4": 201,
+        "slots_held_by_count_le_4": 450,
+        "single_cap_bucket_rows": 58072,
+        "single_cap_pad_frac": 0.9118335858933737
+      },
+      "baseline": {
+        "sync_ms": 23.143126000832126,
+        "batched_ms": 22.971099333517486,
+        "peak_MiB": 5785.5009765625,
+        "parts": {
+          "unique": 427,
+          "slots": 5120,
+          "compact_ms": 1.1869499994645594,
+          "dequant_ms": 21.698691000892723,
+          "bf16_mib": 4003.125,
+          "materialized_MiB": 4003.125,
+          "cap": 136,
+          "pad_frac": 0.9118335858933737,
+          "bucket_rows": 58072,
+          "double_count_matrix_ms": 0.48503799916943535,
+          "grouped_ms": 4.609593000168388,
+          "bucket_add_ms": 4.252446499776852
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 106.82806549993984,
+        "accuracy": {
+          "cosine": 0.9999139308929443,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 1310720
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 32,
+          "chunks": 14,
+          "bucket_rows": 8043,
+          "pad_frac": 0.36342160885241825,
+          "sync_ms": 23.227129500810406,
+          "batched_ms": 24.64978600013031,
+          "peak_MiB": 4711.703125,
+          "materialized_MiB": 600.0,
+          "accuracy": {
+            "cosine": 0.9999139308929443,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "chunk": 64,
+          "chunks": 7,
+          "bucket_rows": 11563,
+          "pad_frac": 0.5572083369367811,
+          "sync_ms": 24.733342000217817,
+          "batched_ms": 22.111367000131093,
+          "peak_MiB": 4711.7099609375,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 0.9999139308929443,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "chunk": 128,
+          "chunks": 4,
+          "bucket_rows": 19243,
+          "pad_frac": 0.7339292210154342,
+          "sync_ms": 21.544643500419625,
+          "batched_ms": 21.452147000066663,
+          "peak_MiB": 4711.7113037109375,
+          "materialized_MiB": 2400.0,
+          "accuracy": {
+            "cosine": 0.9999139308929443,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "chunk": 512,
+          "chunks": 1,
+          "bucket_rows": 58072,
+          "pad_frac": 0.9118335858933737,
+          "sync_ms": 20.850593000432127,
+          "batched_ms": 20.89515866646252,
+          "peak_MiB": 4711.7099609375,
+          "materialized_MiB": 8006.25,
+          "accuracy": {
+            "cosine": 0.9999139308929443,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        }
+      ],
+      "h18_best_chunk": 512,
+      "h18_production": {
+        "sync_ms": 23.89695500005473,
+        "batched_ms": 22.95554166691242,
+        "accuracy": {
+          "cosine": 0.9999139308929443,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 1310720
+        },
+        "peak_MiB": 4711.7099609375
+      },
+      "h18_disabled_sync_ms": 0.0009550003596814349,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 22.25840800019796,
+          "accuracy": {
+            "cosine": 0.9999139308929443,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        }
+      ]
+    },
+    "T=2048": {
+      "routing": {
+        "slots": 20480,
+        "unique": 473,
+        "cap_single": 551,
+        "count_p50": 16.0,
+        "count_max": 551,
+        "count_min": 1,
+        "top5_counts": [
+          551,
+          462,
+          426,
+          416,
+          385
+        ],
+        "experts_count_le_4": 61,
+        "slots_held_by_count_le_4": 176,
+        "single_cap_bucket_rows": 260623,
+        "single_cap_pad_frac": 0.9214190612493909
+      },
+      "baseline": {
+        "sync_ms": 34.73622950059507,
+        "batched_ms": 33.61183533343137,
+        "peak_MiB": 9136.643798828125,
+        "parts": {
+          "unique": 473,
+          "slots": 20480,
+          "compact_ms": 0.8438639997621067,
+          "dequant_ms": 21.270711999932246,
+          "bf16_mib": 4434.375,
+          "materialized_MiB": 4434.375,
+          "cap": 551,
+          "pad_frac": 0.9214190612493909,
+          "bucket_rows": 260623,
+          "double_count_matrix_ms": 0.8174140002665808,
+          "grouped_ms": 15.264723499967658,
+          "bucket_add_ms": 15.174451999882876
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 124.93606500083843,
+        "accuracy": {
+          "cosine": 1.0000016689300537,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 5242880
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 32,
+          "chunks": 15,
+          "bucket_rows": 32427,
+          "pad_frac": 0.36842754494711194,
+          "sync_ms": 28.71109400075511,
+          "batched_ms": 28.550217666634126,
+          "peak_MiB": 4817.2646484375,
+          "materialized_MiB": 600.0,
+          "accuracy": {
+            "cosine": 1.0000016689300537,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 64,
+          "chunks": 8,
+          "bucket_rows": 46923,
+          "pad_frac": 0.5635402680988002,
+          "sync_ms": 27.470164000078512,
+          "batched_ms": 26.385341333176864,
+          "peak_MiB": 4817.271484375,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 1.0000016689300537,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 128,
+          "chunks": 4,
+          "bucket_rows": 77846,
+          "pad_frac": 0.736916476119518,
+          "sync_ms": 26.05447150017426,
+          "batched_ms": 25.86151366631384,
+          "peak_MiB": 4817.2720947265625,
+          "materialized_MiB": 2400.0,
+          "accuracy": {
+            "cosine": 1.0000016689300537,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 512,
+          "chunks": 1,
+          "bucket_rows": 260623,
+          "pad_frac": 0.9214190612493909,
+          "sync_ms": 25.461578000431473,
+          "batched_ms": 24.82240633313874,
+          "peak_MiB": 4817.27197265625,
+          "materialized_MiB": 8868.75,
+          "accuracy": {
+            "cosine": 1.0000016689300537,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        }
+      ],
+      "h18_best_chunk": 512,
+      "h18_production": {
+        "sync_ms": 26.861832499889715,
+        "batched_ms": 25.751307666723733,
+        "accuracy": {
+          "cosine": 1.0000016689300537,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 5242880
+        },
+        "peak_MiB": 4817.271484375
+      },
+      "h18_disabled_sync_ms": 0.0008500001058564521,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 29.234665500553092,
+          "accuracy": {
+            "cosine": 1.0000016689300537,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        }
+      ]
+    }
+  },
+  "lazy_caveat": "chunk-sweep and dedup rows in lazy mode include a per-shape recipe compile in their first sample, and max_memory_allocated is dominated by lazy graph buffers; only the 'h18_production' and 'block' rows are quotable.",
+  "before_after": {
+    "T=512": {
+      "before_ms": 23.143126000832126,
+      "after_ms": 23.89695500005473,
+      "speedup": 0.9684550186740998,
+      "delta_pct": 3.257247958618473,
+      "before_peak_MiB": 5785.5009765625,
+      "after_peak_MiB": 4711.7099609375,
+      "peak_reduction_pct": 18.560035163333445,
+      "cosine": 0.9999139308929443,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 1310720
+    },
+    "T=2048": {
+      "before_ms": 34.73622950059507,
+      "after_ms": 26.861832499889715,
+      "speedup": 1.2931444457759047,
+      "delta_pct": -22.669118421648093,
+      "before_peak_MiB": 9136.643798828125,
+      "after_peak_MiB": 4817.271484375,
+      "peak_reduction_pct": 47.275262224922585,
+      "cosine": 1.0000016689300537,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 5242880
+    }
+  }
+}

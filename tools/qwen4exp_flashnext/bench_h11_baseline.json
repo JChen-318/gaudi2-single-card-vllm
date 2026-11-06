@@ -1,0 +1,272 @@
+{
+  "benchmark": "bench_layer_e2e (H11 Phase 1)",
+  "checkpoint": "~/models/qwen4exp-flashnext-plain",
+  "kernel_lib": "vllm-gaudi/csrc/qwen4exp/build/libqwen4exp_gaudi2_kernels.so",
+  "pt_hpu_lazy_mode": "0",
+  "mode_notes": [
+    "component ms: torch.hpu.synchronize() around every call, median (attribution; sum >= real layer)",
+    "full_layer ms: no synchronize inside the timed loop, live accumulator, one sync after the loop",
+    "HC read=GatedResidual.mix, write=GatedResidual.combine; production fuses write+next read (combine_and_mix), used by the full-layer path",
+    "no gdn.py/ple.py exists in this tree: GDN=HPUGatedDeltaNetAttention (qwen3_5), PLE=ple_layer+ple_runtime",
+    "PLE tables: 128 host mmap shards, pin_memory=False; kv/norm/conv weights on HPU"
+  ],
+  "geometry": {
+    "hidden": 2560,
+    "hc_count": 4,
+    "hc_lowrank": 320,
+    "experts": 512,
+    "top_k": 10,
+    "moe_intermediate": 640,
+    "layers_total": 48,
+    "gdn_layers": 36,
+    "qsa_layers": 12,
+    "ple_layers": 1,
+    "ple_layer_idx": 1
+  },
+  "regimes": {
+    "decode_T1": {
+      "mode": "decode",
+      "tokens": 1,
+      "layers": {
+        "layer0_gdn": {
+          "components_ms": {
+            "hc_attn_read": 0.5558470002142712,
+            "mixer": 1.8024099999820464,
+            "hc_attn_write": 0.21313500019459752,
+            "hc_mlp_read": 0.511084000208939,
+            "router_topk": 0.2697179997994681,
+            "routed_moe": 0.5128550001245458,
+            "shared_expert": 0.22878600020703743,
+            "hc_mlp_write": 0.18956299982164637
+          },
+          "components_sum_ms": 4.283398000552552,
+          "full_layer_unsync_ms": 3.9762719000009383
+        },
+        "layer3_qsa": {
+          "components_ms": {
+            "hc_attn_read": 0.6118410001363372,
+            "mixer": 13.163869999971212,
+            "hc_attn_write": 0.2419369998278853,
+            "hc_mlp_read": 0.5412860000433284,
+            "router_topk": 0.304519999644981,
+            "routed_moe": 0.5058140000073763,
+            "shared_expert": 0.2807490000122925,
+            "hc_mlp_write": 0.21676500000467058
+          },
+          "components_sum_ms": 15.866781999648083,
+          "full_layer_unsync_ms": 14.351625799963585
+        }
+      },
+      "checksums": {
+        "layer0_gdn.hc_attn_read": 16.039180755615234,
+        "layer0_gdn.mixer": 18.417496025562286,
+        "layer0_gdn.hc_attn_write": -198.71217727661133,
+        "layer0_gdn.hc_mlp_read": -157.00255393981934,
+        "layer0_gdn.router_topk": 23030.0,
+        "layer0_gdn.routed_moe": -1.1695098876953125,
+        "layer0_gdn.shared_expert": -20389.30908203125,
+        "layer0_gdn.hc_mlp_write": -96174.072265625,
+        "layer0_gdn.full_layer": -25071.94140625,
+        "layer3_qsa.hc_attn_read": -146.9226360321045,
+        "layer3_qsa.mixer": 50.19632530212402,
+        "layer3_qsa.hc_attn_write": 18.409786224365234,
+        "layer3_qsa.hc_mlp_read": 52.40372180938721,
+        "layer3_qsa.router_topk": 26170.0,
+        "layer3_qsa.routed_moe": 0.22213280200958252,
+        "layer3_qsa.shared_expert": 7700.3759765625,
+        "layer3_qsa.hc_mlp_write": 38451.64794921875,
+        "layer3_qsa.full_layer": 131160.71875,
+        "ple": -104.32931709289551
+      },
+      "ple_ms": 5.289223000090715
+    },
+    "decode_T4": {
+      "mode": "decode",
+      "tokens": 4,
+      "layers": {
+        "layer0_gdn": {
+          "components_ms": {
+            "hc_attn_read": 0.7304390001081629,
+            "mixer": 2.0761279997714155,
+            "hc_attn_write": 0.21533500012083095,
+            "hc_mlp_read": 0.45411100018100115,
+            "router_topk": 0.26245700018989737,
+            "routed_moe": 1.1705380002240418,
+            "shared_expert": 0.25206700001945137,
+            "hc_mlp_write": 0.22216499974092585
+          },
+          "components_sum_ms": 5.383240000355727,
+          "full_layer_unsync_ms": 3.809156300030736
+        },
+        "layer3_qsa": {
+          "components_ms": {
+            "hc_attn_read": 0.452101000064431,
+            "mixer": 45.60426499983805,
+            "hc_attn_write": 0.2501760000086506,
+            "hc_mlp_read": 0.5226449998190219,
+            "router_topk": 0.2758579998953792,
+            "routed_moe": 1.1928499998248299,
+            "shared_expert": 0.251055999797245,
+            "hc_mlp_write": 0.2316350000910461
+          },
+          "components_sum_ms": 48.780585999338655,
+          "full_layer_unsync_ms": 47.32914239998536
+        }
+      },
+      "checksums": {
+        "layer0_gdn.hc_attn_read": -346.14070892333984,
+        "layer0_gdn.mixer": -21.032870411872864,
+        "layer0_gdn.hc_attn_write": -728.1114959716797,
+        "layer0_gdn.hc_mlp_read": -1099.7630310058594,
+        "layer0_gdn.router_topk": 96600.0,
+        "layer0_gdn.routed_moe": 22.964398860931396,
+        "layer0_gdn.shared_expert": -62385.693359375,
+        "layer0_gdn.hc_mlp_write": -241593.22265625,
+        "layer0_gdn.full_layer": -879437.0625,
+        "layer3_qsa.hc_attn_read": -127.77352333068848,
+        "layer3_qsa.mixer": 16.327549695968628,
+        "layer3_qsa.hc_attn_write": -559.0089416503906,
+        "layer3_qsa.hc_mlp_read": 132.51096725463867,
+        "layer3_qsa.router_topk": 81870.0,
+        "layer3_qsa.routed_moe": 3.361538052558899,
+        "layer3_qsa.shared_expert": -13231.5625,
+        "layer3_qsa.hc_mlp_write": -54207.9296875,
+        "layer3_qsa.full_layer": -319853.1875,
+        "ple": -365.59079360961914
+      },
+      "ple_ms": 12.473700000100507
+    },
+    "prefill_T512": {
+      "mode": "prefill",
+      "tokens": 512,
+      "layers": {
+        "layer0_gdn": {
+          "components_ms": {
+            "hc_attn_read": 0.5896490001759958,
+            "mixer": 5.4675139999744715,
+            "hc_attn_write": 0.3018900001734437,
+            "hc_mlp_read": 0.5444159996841336,
+            "router_topk": 0.35109400005239877,
+            "routed_moe": 27.528344000074867,
+            "shared_expert": 0.4183579999335052,
+            "hc_mlp_write": 0.31426099985765177
+          },
+          "components_sum_ms": 35.51552599992647,
+          "full_layer_unsync_ms": 32.418059000065114
+        },
+        "layer3_qsa": {
+          "components_ms": {
+            "hc_attn_read": 0.565628000003926,
+            "mixer": 26.06725500027096,
+            "hc_attn_write": 0.39506600023742067,
+            "hc_mlp_read": 0.7450090001839271,
+            "router_topk": 0.3973859998041007,
+            "routed_moe": 26.01265200019043,
+            "shared_expert": 0.3283820001342974,
+            "hc_mlp_write": 0.29213900006652693
+          },
+          "components_sum_ms": 54.80351700089159,
+          "full_layer_unsync_ms": 52.122689000043465
+        }
+      },
+      "checksums": {
+        "layer0_gdn.hc_attn_read": 8489.481567382812,
+        "layer0_gdn.mixer": -13020.2822265625,
+        "layer0_gdn.hc_attn_write": -88418.435546875,
+        "layer0_gdn.hc_mlp_read": -27273.34326171875,
+        "layer0_gdn.router_topk": 8440292.0,
+        "layer0_gdn.routed_moe": 1263.084716796875,
+        "layer0_gdn.shared_expert": 880824.125,
+        "layer0_gdn.hc_mlp_write": 3370939.03125,
+        "layer0_gdn.full_layer": 8617193.0,
+        "layer3_qsa.hc_attn_read": 5516.772033691406,
+        "layer3_qsa.mixer": 5756.9560546875,
+        "layer3_qsa.hc_attn_write": 43298.2060546875,
+        "layer3_qsa.hc_mlp_read": 28150.002685546875,
+        "layer3_qsa.router_topk": 9535071.0,
+        "layer3_qsa.routed_moe": 285.1768798828125,
+        "layer3_qsa.shared_expert": -679860.8125,
+        "layer3_qsa.hc_mlp_write": -3629304.875,
+        "layer3_qsa.full_layer": -1168876.875,
+        "ple": 13527.2236328125
+      },
+      "ple_ms": 12.444288000097004
+    }
+  },
+  "projection_48layer": {
+    "decode_T1": {
+      "breakdown_ms": {
+        "GDN": 64.88675999935367,
+        "QSA": 157.96643999965454,
+        "HC": 72.248592015967,
+        "RoutedMoE": 24.532548004572163,
+        "SharedExpert": 11.605284007600858,
+        "Router": 13.364087988520623,
+        "PLE": 5.289223000090715
+      },
+      "breakdown_pct": {
+        "GDN": 18.544747122839475,
+        "QSA": 45.14707906078171,
+        "HC": 20.648771319921863,
+        "RoutedMoE": 7.011444230352119,
+        "SharedExpert": 3.316810042785843,
+        "Router": 3.819479232388242,
+        "PLE": 1.5116689909307492
+      },
+      "projected_48layer_sync_sum_ms": 349.8929350157596,
+      "projected_48layer_full_layer_unsync_ms": 320.6545209996875,
+      "tokens": 1,
+      "projected_ms_per_token_sync": 349.8929350157596,
+      "vs_reference_273ms_per_token_pct": 128.165910262183
+    },
+    "decode_T4": {
+      "breakdown_ms": {
+        "GDN": 74.74060799177096,
+        "QSA": 547.2511799980566,
+        "HC": 75.87248400523094,
+        "RoutedMoE": 56.45356800596346,
+        "SharedExpert": 12.08708399826719,
+        "Router": 12.758748005580856,
+        "PLE": 12.473700000100507
+      },
+      "breakdown_pct": {
+        "GDN": 9.441268266867734,
+        "QSA": 69.12902287723482,
+        "HC": 9.584247369861988,
+        "RoutedMoE": 7.1312408941715555,
+        "SharedExpert": 1.526846056756312,
+        "Router": 1.6116909656838114,
+        "PLE": 1.5756835694237774
+      },
+      "projected_48layer_sync_sum_ms": 791.6373720049705,
+      "projected_48layer_full_layer_unsync_ms": 717.5530356010313,
+      "tokens": 4,
+      "projected_ms_per_token_sync": 197.90934300124263,
+      "vs_reference_273ms_per_token_pct": 72.49426483562002
+    },
+    "prefill_T512": {
+      "breakdown_ms": {
+        "GDN": 196.83050399908097,
+        "QSA": 312.80706000325154,
+        "HC": 86.9818800019857,
+        "RoutedMoE": 1303.1722080049803,
+        "SharedExpert": 19.001471999217756,
+        "Router": 17.408015999535564,
+        "PLE": 12.444288000097004
+      },
+      "breakdown_pct": {
+        "GDN": 10.100888605490207,
+        "QSA": 16.052538625407816,
+        "HC": 4.463709957275098,
+        "RoutedMoE": 66.87579942837762,
+        "SharedExpert": 0.9751118251738866,
+        "Router": 0.8933393294299596,
+        "PLE": 0.6386122288454092
+      },
+      "projected_48layer_sync_sum_ms": 1948.6454280081489,
+      "projected_48layer_full_layer_unsync_ms": 1804.9666800029627,
+      "tokens": 512,
+      "prefill_tokens_per_s_at_projected_sync": 262.74662010900164
+    }
+  }
+}

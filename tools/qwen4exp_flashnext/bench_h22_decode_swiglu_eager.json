@@ -1,0 +1,110 @@
+{
+  "unit": "H22 Phase 1 decode: swiglu_gemv_slots gate",
+  "lazy_mode": "0",
+  "layer": 0,
+  "slot_curve": [
+    {
+      "S": 10,
+      "bit_diff": 2321,
+      "bit_diff_f32_emul": 1676,
+      "elements": 6400,
+      "fused_ms": 0.5170349977561273,
+      "two_gemv_ms": 0.6409260022337548,
+      "two_gemv_f32_ms": 0.481391998619074,
+      "fused_batched_ms": 0.23220525054057362,
+      "two_gemv_batched_ms": 0.2688609993128921,
+      "two_gemv_f32_batched_ms": 0.2868452502298169,
+      "delta_pct": 23.961821736497598,
+      "delta_f32_pct": -6.893730461523844
+    },
+    {
+      "S": 40,
+      "bit_diff": 9293,
+      "bit_diff_f32_emul": 6629,
+      "elements": 25600,
+      "fused_ms": 0.8607549971202388,
+      "two_gemv_ms": 0.7657669993932359,
+      "two_gemv_f32_ms": 0.8095910015981644,
+      "fused_batched_ms": 0.5557562499234336,
+      "two_gemv_batched_ms": 0.5227060000834172,
+      "two_gemv_f32_batched_ms": 0.5335067498890567,
+      "delta_pct": -11.035427972512146,
+      "delta_f32_pct": -5.94408347244568
+    },
+    {
+      "S": 80,
+      "bit_diff": 18610,
+      "bit_diff_f32_emul": 13448,
+      "elements": 51200,
+      "fused_ms": 1.2794619979104027,
+      "two_gemv_ms": 1.3005039982090238,
+      "two_gemv_f32_ms": 1.2473899987526238,
+      "fused_batched_ms": 1.0380610001448076,
+      "two_gemv_batched_ms": 0.945527749536268,
+      "two_gemv_f32_batched_ms": 0.9307367499786778,
+      "delta_pct": 1.6445975209100856,
+      "delta_f32_pct": -2.506678526611842
+    }
+  ],
+  "grouped_gemv": [
+    {
+      "T": 1,
+      "S": 10,
+      "max_slots": 512,
+      "sync_ms": 0.6306449977273587,
+      "batched_ms": 0.3729602503881324
+    },
+    {
+      "T": 1,
+      "S": 10,
+      "max_slots": 10,
+      "sync_ms": 0.5423379989224486,
+      "batched_ms": 0.3912817501259269
+    },
+    {
+      "T": 4,
+      "S": 40,
+      "max_slots": 512,
+      "sync_ms": 1.3041750025877263,
+      "batched_ms": 1.0281325003234087
+    },
+    {
+      "T": 4,
+      "S": 40,
+      "max_slots": 10,
+      "sync_ms": 1.1882539984071627,
+      "batched_ms": 0.9803432503758813
+    },
+    {
+      "T": 8,
+      "S": 80,
+      "max_slots": 512,
+      "sync_ms": 2.4408739991486073,
+      "batched_ms": 1.912577499751933
+    },
+    {
+      "T": 8,
+      "S": 80,
+      "max_slots": 10,
+      "sync_ms": 2.035248002357548,
+      "batched_ms": 1.8353007499172236
+    }
+  ],
+  "grouped_bit_diff": [
+    {
+      "T": 1,
+      "bit_diff": 0,
+      "elements": 2560
+    },
+    {
+      "T": 4,
+      "bit_diff": 6475,
+      "elements": 10240
+    },
+    {
+      "T": 8,
+      "bit_diff": 12909,
+      "elements": 20480
+    }
+  ]
+}

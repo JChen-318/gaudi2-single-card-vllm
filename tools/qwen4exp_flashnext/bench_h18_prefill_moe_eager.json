@@ -1,0 +1,896 @@
+{
+  "unit": "H18 Step 2 / Part 2 (Direction 2-A: prefill MoE HBM round trip)",
+  "checkpoint": "~/models/qwen4exp-flashnext-plain",
+  "layer": "model.language_model.layers.0.mlp",
+  "lazy_mode": "0",
+  "geometry": {
+    "hidden": 2560,
+    "num_experts": 512,
+    "top_k": 10,
+    "moe_inter": 640,
+    "bf16_MiB_per_expert_all_3_proj": 9.375
+  },
+  "note": "'regimes' are routed-MoE-only (dequant + bucket + bmm) at real Layer-0 routing; 'block' is the production Qwen4ExpSparseMoeBlock (router + routed + shared). All candidate rows are compared with the H9(a) baseline on the same weights/inputs in one process.",
+  "regimes": {
+    "T=64": {
+      "routing": {
+        "slots": 640,
+        "unique": 229,
+        "cap_single": 20,
+        "count_p50": 2.0,
+        "count_max": 20,
+        "count_min": 1,
+        "top5_counts": [
+          20,
+          19,
+          14,
+          14,
+          13
+        ],
+        "experts_count_le_4": 188,
+        "slots_held_by_count_le_4": 326,
+        "single_cap_bucket_rows": 4580,
+        "single_cap_pad_frac": 0.8602620087336245
+      },
+      "baseline": {
+        "sync_ms": 13.357607499528967,
+        "batched_ms": 13.287240999488859,
+        "peak_MiB": 3583.5491943359375,
+        "parts": {
+          "unique": 229,
+          "slots": 640,
+          "compact_ms": 1.0986090001097182,
+          "dequant_ms": 10.212815499471617,
+          "bf16_mib": 2146.875,
+          "materialized_MiB": 2146.875,
+          "cap": 20,
+          "pad_frac": 0.8602620087336245,
+          "bucket_rows": 4580,
+          "double_count_matrix_ms": 0.9076890000869753,
+          "grouped_ms": 3.444046999902639,
+          "bucket_add_ms": 2.7676575000441517
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 13.964306999696419,
+        "accuracy": {
+          "cosine": 0.9999943375587463,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 163840
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 8,
+          "chunks": 29,
+          "bucket_rows": 725,
+          "pad_frac": 0.11724137931034484,
+          "sync_ms": 17.87905349920038,
+          "batched_ms": 15.677195333410054,
+          "peak_MiB": 2019.27978515625,
+          "materialized_MiB": 150.0,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 16,
+          "chunks": 15,
+          "bucket_rows": 821,
+          "pad_frac": 0.22046285018270406,
+          "sync_ms": 14.762916500330903,
+          "batched_ms": 14.278967000185125,
+          "peak_MiB": 2733.0408935546875,
+          "materialized_MiB": 300.0,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 32,
+          "chunks": 8,
+          "bucket_rows": 1061,
+          "pad_frac": 0.3967954759660698,
+          "sync_ms": 14.111468000010063,
+          "batched_ms": 13.123119333007102,
+          "peak_MiB": 3187.65869140625,
+          "materialized_MiB": 600.0,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 64,
+          "chunks": 4,
+          "bucket_rows": 1573,
+          "pad_frac": 0.593134138588684,
+          "sync_ms": 14.08534349866386,
+          "batched_ms": 13.074058999942887,
+          "peak_MiB": 3135.4962158203125,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 128,
+          "chunks": 2,
+          "bucket_rows": 2661,
+          "pad_frac": 0.759488913942127,
+          "sync_ms": 12.768538999807788,
+          "batched_ms": 12.497666333122956,
+          "peak_MiB": 3562.359375,
+          "materialized_MiB": 2400.0,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 256,
+          "chunks": 1,
+          "bucket_rows": 4580,
+          "pad_frac": 0.8602620087336245,
+          "sync_ms": 13.275898500069161,
+          "batched_ms": 12.52858633354966,
+          "peak_MiB": 3587.3243408203125,
+          "materialized_MiB": 4293.75,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        },
+        {
+          "chunk": 512,
+          "chunks": 1,
+          "bucket_rows": 4580,
+          "pad_frac": 0.8602620087336245,
+          "sync_ms": 13.435399999252695,
+          "batched_ms": 12.75792366626168,
+          "peak_MiB": 3587.325439453125,
+          "materialized_MiB": 4293.75,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        }
+      ],
+      "h18_best_chunk": 128,
+      "h18_production": {
+        "sync_ms": 13.606090000394033,
+        "batched_ms": 13.008260333056873,
+        "accuracy": {
+          "cosine": 0.9999943375587463,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 163840
+        },
+        "peak_MiB": 3546.4171142578125
+      },
+      "h18_disabled_sync_ms": 0.0019899998733308166,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 15.720433500064246,
+          "accuracy": {
+            "cosine": 0.9999943375587463,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 163840
+          }
+        }
+      ]
+    },
+    "T=128": {
+      "routing": {
+        "slots": 1280,
+        "unique": 293,
+        "cap_single": 35,
+        "count_p50": 2.0,
+        "count_max": 35,
+        "count_min": 1,
+        "top5_counts": [
+          35,
+          35,
+          31,
+          29,
+          27
+        ],
+        "experts_count_le_4": 204,
+        "slots_held_by_count_le_4": 366,
+        "single_cap_bucket_rows": 10255,
+        "single_cap_pad_frac": 0.8751828376401756
+      },
+      "baseline": {
+        "sync_ms": 16.697017500518996,
+        "batched_ms": 16.338114666723413,
+        "peak_MiB": 4288.0946044921875,
+        "parts": {
+          "unique": 293,
+          "slots": 1280,
+          "compact_ms": 1.019798999550403,
+          "dequant_ms": 13.292924999404931,
+          "bf16_mib": 2746.875,
+          "materialized_MiB": 2746.875,
+          "cap": 35,
+          "pad_frac": 0.8751828376401756,
+          "bucket_rows": 10255,
+          "double_count_matrix_ms": 0.8459700002276804,
+          "grouped_ms": 3.6450924999371637,
+          "bucket_add_ms": 3.478957499282842
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 16.369987999496516,
+        "accuracy": {
+          "cosine": 0.9999692440032959,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 327680
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 8,
+          "chunks": 37,
+          "bucket_rows": 1413,
+          "pad_frac": 0.09412597310686488,
+          "sync_ms": 20.398140499310102,
+          "batched_ms": 20.17693033364291,
+          "peak_MiB": 2296.48974609375,
+          "materialized_MiB": 150.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 16,
+          "chunks": 19,
+          "bucket_rows": 1589,
+          "pad_frac": 0.19446192573945875,
+          "sync_ms": 18.662088000382937,
+          "batched_ms": 17.73717166664331,
+          "peak_MiB": 3211.2454833984375,
+          "materialized_MiB": 300.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 32,
+          "chunks": 10,
+          "bucket_rows": 1989,
+          "pad_frac": 0.3564605329311211,
+          "sync_ms": 17.242923499907192,
+          "batched_ms": 16.468072666611988,
+          "peak_MiB": 3412.450439453125,
+          "materialized_MiB": 600.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 64,
+          "chunks": 5,
+          "bucket_rows": 2917,
+          "pad_frac": 0.5611930065135413,
+          "sync_ms": 16.93322399933095,
+          "batched_ms": 16.183207333597238,
+          "peak_MiB": 3666.5804443359375,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 128,
+          "chunks": 3,
+          "bucket_rows": 4901,
+          "pad_frac": 0.7388288104468476,
+          "sync_ms": 17.148100500889996,
+          "batched_ms": 16.302650666451274,
+          "peak_MiB": 4222.821533203125,
+          "materialized_MiB": 2400.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 256,
+          "chunks": 2,
+          "bucket_rows": 8997,
+          "pad_frac": 0.857730354562632,
+          "sync_ms": 16.80146550097561,
+          "batched_ms": 15.652401333378899,
+          "peak_MiB": 4282.8187255859375,
+          "materialized_MiB": 4800.0,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        },
+        {
+          "chunk": 512,
+          "chunks": 1,
+          "bucket_rows": 10255,
+          "pad_frac": 0.8751828376401756,
+          "sync_ms": 16.138201000103436,
+          "batched_ms": 15.647204333314827,
+          "peak_MiB": 4294.974853515625,
+          "materialized_MiB": 5493.75,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        }
+      ],
+      "h18_best_chunk": 512,
+      "h18_production": {
+        "sync_ms": 16.818811500343145,
+        "batched_ms": 16.247462333315827,
+        "accuracy": {
+          "cosine": 0.9999692440032959,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 327680
+        },
+        "peak_MiB": 3845.9937744140625
+      },
+      "h18_disabled_sync_ms": 0.0008449997039861046,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 16.646876999402593,
+          "accuracy": {
+            "cosine": 0.9999692440032959,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 327680
+          }
+        }
+      ]
+    },
+    "T=512": {
+      "routing": {
+        "slots": 5120,
+        "unique": 426,
+        "cap_single": 136,
+        "count_p50": 5.0,
+        "count_max": 136,
+        "count_min": 1,
+        "top5_counts": [
+          136,
+          121,
+          114,
+          104,
+          102
+        ],
+        "experts_count_le_4": 199,
+        "slots_held_by_count_le_4": 446,
+        "single_cap_bucket_rows": 57936,
+        "single_cap_pad_frac": 0.9116266224799779
+      },
+      "baseline": {
+        "sync_ms": 26.3306275001014,
+        "batched_ms": 24.615064666553128,
+        "peak_MiB": 6415.5408935546875,
+        "parts": {
+          "unique": 426,
+          "slots": 5120,
+          "compact_ms": 1.1485800005175406,
+          "dequant_ms": 18.908524500147905,
+          "bf16_mib": 3993.75,
+          "materialized_MiB": 3993.75,
+          "cap": 136,
+          "pad_frac": 0.9116266224799779,
+          "bucket_rows": 57936,
+          "double_count_matrix_ms": 1.093086999389925,
+          "grouped_ms": 6.971464999878663,
+          "bucket_add_ms": 6.508478000796458
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 25.509085498924833,
+        "accuracy": {
+          "cosine": 1.0000014305114746,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 1310720
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 64,
+          "chunks": 7,
+          "bucket_rows": 11626,
+          "pad_frac": 0.5596077756752107,
+          "sync_ms": 23.799822500222945,
+          "batched_ms": 22.744845332757297,
+          "peak_MiB": 5293.140625,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 1.0000014305114746,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        }
+      ],
+      "h18_best_chunk": 64,
+      "h18_production": {
+        "sync_ms": 23.46439200118766,
+        "batched_ms": 22.985523666648078,
+        "accuracy": {
+          "cosine": 1.0000014305114746,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 1310720
+        },
+        "peak_MiB": 5435.7357177734375
+      },
+      "h18_disabled_sync_ms": 0.0009800005500437692,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 24.02006650027033,
+          "accuracy": {
+            "cosine": 1.0000014305114746,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 1,
+          "sparse_experts": 64,
+          "sparse_slots": 64,
+          "dequant_experts_removed": 64,
+          "bf16_MiB_removed": 600.0,
+          "sync_ms": 23.189267500129063,
+          "accuracy": {
+            "cosine": 1.000001311302185,
+            "rel_max": 0.0026455027982592583,
+            "rel_rms": 0.0007301187142729759,
+            "bf16_bit_diff": 48984,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 2,
+          "sparse_experts": 123,
+          "sparse_slots": 182,
+          "dequant_experts_removed": 123,
+          "bf16_MiB_removed": 1153.125,
+          "sync_ms": 23.828686000342714,
+          "accuracy": {
+            "cosine": 1.0000009536743164,
+            "rel_max": 0.0026455027982592583,
+            "rel_rms": 0.0011774335289373994,
+            "bf16_bit_diff": 124248,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 3,
+          "sparse_experts": 163,
+          "sparse_slots": 302,
+          "dequant_experts_removed": 163,
+          "bf16_MiB_removed": 1528.125,
+          "sync_ms": 24.762050000390445,
+          "accuracy": {
+            "cosine": 1.0000004768371582,
+            "rel_max": 0.0026455027982592583,
+            "rel_rms": 0.0015152879059314728,
+            "bf16_bit_diff": 194458,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 4,
+          "sparse_experts": 199,
+          "sparse_slots": 446,
+          "dequant_experts_removed": 199,
+          "bf16_MiB_removed": 1865.625,
+          "sync_ms": 27.090268999927503,
+          "accuracy": {
+            "cosine": 0.9999998807907104,
+            "rel_max": 0.0026455027982592583,
+            "rel_rms": 0.0018257838673889637,
+            "bf16_bit_diff": 263827,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 6,
+          "sparse_experts": 252,
+          "sparse_slots": 736,
+          "dequant_experts_removed": 252,
+          "bf16_MiB_removed": 2362.5,
+          "sync_ms": 32.68784549982229,
+          "accuracy": {
+            "cosine": 0.9999989867210388,
+            "rel_max": 0.0052910055965185165,
+            "rel_rms": 0.0022744587622582912,
+            "bf16_bit_diff": 369766,
+            "bf16_elements": 1310720
+          }
+        },
+        {
+          "k_sparse": 8,
+          "sparse_experts": 286,
+          "sparse_slots": 989,
+          "dequant_experts_removed": 286,
+          "bf16_MiB_removed": 2681.25,
+          "sync_ms": 36.26542599977256,
+          "accuracy": {
+            "cosine": 0.9999982118606567,
+            "rel_max": 0.0052910055965185165,
+            "rel_rms": 0.0026044240221381187,
+            "bf16_bit_diff": 456370,
+            "bf16_elements": 1310720
+          }
+        }
+      ]
+    },
+    "T=2048": {
+      "routing": {
+        "slots": 20480,
+        "unique": 473,
+        "cap_single": 551,
+        "count_p50": 16.0,
+        "count_max": 551,
+        "count_min": 1,
+        "top5_counts": [
+          551,
+          461,
+          427,
+          415,
+          384
+        ],
+        "experts_count_le_4": 60,
+        "slots_held_by_count_le_4": 171,
+        "single_cap_bucket_rows": 260623,
+        "single_cap_pad_frac": 0.9214190612493909
+      },
+      "baseline": {
+        "sync_ms": 41.7326545002652,
+        "batched_ms": 41.43541033348205,
+        "peak_MiB": 10571.210693359375,
+        "parts": {
+          "unique": 473,
+          "slots": 20480,
+          "compact_ms": 1.3020850001339568,
+          "dequant_ms": 21.268749000228127,
+          "bf16_mib": 4434.375,
+          "materialized_MiB": 4434.375,
+          "cap": 551,
+          "pad_frac": 0.9214190612493909,
+          "bucket_rows": 260623,
+          "double_count_matrix_ms": 1.3200360008340795,
+          "grouped_ms": 22.586810000575497,
+          "bucket_add_ms": 20.804007000151614
+        }
+      },
+      "h18_only_dedup": {
+        "sync_ms": 41.809167999417696,
+        "accuracy": {
+          "cosine": 1.0000061988830566,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 5242880
+        }
+      },
+      "h18_chunk_sweep": [
+        {
+          "chunk": 8,
+          "chunks": 60,
+          "bucket_rows": 22737,
+          "pad_frac": 0.09926551435985398,
+          "sync_ms": 33.70918449945748,
+          "batched_ms": 33.83134233323896,
+          "peak_MiB": 3160.2275390625,
+          "materialized_MiB": 150.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0010869564721360803,
+            "rel_rms": 0.00018616780289448798,
+            "bf16_bit_diff": 15185,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 16,
+          "chunks": 30,
+          "bucket_rows": 25513,
+          "pad_frac": 0.1972719789911026,
+          "sync_ms": 30.149196499223763,
+          "batched_ms": 29.801799667135736,
+          "peak_MiB": 4185.12890625,
+          "materialized_MiB": 300.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0010869564721360803,
+            "rel_rms": 0.00018616780289448798,
+            "bf16_bit_diff": 15185,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 32,
+          "chunks": 15,
+          "bucket_rows": 32299,
+          "pad_frac": 0.3659246416297718,
+          "sync_ms": 29.13429699947301,
+          "batched_ms": 27.94086700002178,
+          "peak_MiB": 6060.503662109375,
+          "materialized_MiB": 600.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 64,
+          "chunks": 8,
+          "bucket_rows": 46923,
+          "pad_frac": 0.5635402680988002,
+          "sync_ms": 28.580182000041532,
+          "batched_ms": 28.362398667013622,
+          "peak_MiB": 7551.2261962890625,
+          "materialized_MiB": 1200.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 128,
+          "chunks": 4,
+          "bucket_rows": 77846,
+          "pad_frac": 0.736916476119518,
+          "sync_ms": 30.21607899972878,
+          "batched_ms": 29.75674600020284,
+          "peak_MiB": 8004.1392822265625,
+          "materialized_MiB": 2400.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 256,
+          "chunks": 2,
+          "bucket_rows": 144094,
+          "pad_frac": 0.857870556719919,
+          "sync_ms": 34.89429250021203,
+          "batched_ms": 33.81915233330801,
+          "peak_MiB": 8974.522216796875,
+          "materialized_MiB": 4800.0,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        },
+        {
+          "chunk": 512,
+          "chunks": 1,
+          "bucket_rows": 260623,
+          "pad_frac": 0.9214190612493909,
+          "sync_ms": 40.909172499596025,
+          "batched_ms": 40.08318733334212,
+          "peak_MiB": 10766.7021484375,
+          "materialized_MiB": 8868.75,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        }
+      ],
+      "h18_best_chunk": 64,
+      "h18_production": {
+        "sync_ms": 29.062018498734687,
+        "batched_ms": 28.42703366695787,
+        "accuracy": {
+          "cosine": 1.0000061988830566,
+          "rel_max": 0.0,
+          "rel_rms": 0.0,
+          "bf16_bit_diff": 0,
+          "bf16_elements": 5242880
+        },
+        "peak_MiB": 7472.2432861328125
+      },
+      "h18_disabled_sync_ms": 0.002890001269406639,
+      "sparse_sweep": [
+        {
+          "k_sparse": 0,
+          "sparse_experts": 0,
+          "sparse_slots": 0,
+          "dequant_experts_removed": 0,
+          "bf16_MiB_removed": 0.0,
+          "sync_ms": 29.247616499560536,
+          "accuracy": {
+            "cosine": 1.0000061988830566,
+            "rel_max": 0.0,
+            "rel_rms": 0.0,
+            "bf16_bit_diff": 0,
+            "bf16_elements": 5242880
+          }
+        }
+      ]
+    }
+  },
+  "before_after": {
+    "T=64": {
+      "before_ms": 13.357607499528967,
+      "after_ms": 13.606090000394033,
+      "speedup": 0.9817374057603713,
+      "delta_pct": 1.8602320877734149,
+      "before_peak_MiB": 3583.5491943359375,
+      "after_peak_MiB": 3546.4171142578125,
+      "peak_reduction_pct": 1.0361816753294506,
+      "cosine": 0.9999943375587463,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 163840
+    },
+    "T=128": {
+      "before_ms": 16.697017500518996,
+      "after_ms": 16.818811500343145,
+      "speedup": 0.9927584657321556,
+      "delta_pct": 0.7294356601133306,
+      "before_peak_MiB": 4288.0946044921875,
+      "after_peak_MiB": 3845.9937744140625,
+      "peak_reduction_pct": 10.309959803941416,
+      "cosine": 0.9999692440032959,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 327680
+    },
+    "T=512": {
+      "before_ms": 26.3306275001014,
+      "after_ms": 23.46439200118766,
+      "speedup": 1.1221525577465916,
+      "delta_pct": -10.885557128870934,
+      "before_peak_MiB": 6415.5408935546875,
+      "after_peak_MiB": 5435.7357177734375,
+      "peak_reduction_pct": 15.272370514629596,
+      "cosine": 1.0000014305114746,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 1310720
+    },
+    "T=2048": {
+      "before_ms": 41.7326545002652,
+      "after_ms": 29.062018498734687,
+      "speedup": 1.4359860964950584,
+      "delta_pct": -30.36144274371522,
+      "before_peak_MiB": 10571.210693359375,
+      "after_peak_MiB": 7472.2432861328125,
+      "peak_reduction_pct": 29.315160742877566,
+      "cosine": 1.0000061988830566,
+      "bf16_bit_diff": 0,
+      "bf16_elements": 5242880
+    }
+  },
+  "block": {
+    "T=512": {
+      "before_sync_ms": 25.853021999864723,
+      "after_sync_ms": 24.051860000326997,
+      "after_batched_ms": 23.336345666393754,
+      "before_peak_MiB": 6405.8868408203125,
+      "after_peak_MiB": 5319.9095458984375,
+      "accuracy": {
+        "cosine": 1.0000017881393433,
+        "rel_max": 0.0,
+        "rel_rms": 0.0,
+        "bf16_bit_diff": 0,
+        "bf16_elements": 1310720
+      },
+      "checksum_before": 277.4436340332031,
+      "checksum_after": 277.4436340332031
+    },
+    "T=2048": {
+      "before_sync_ms": 38.16598199955479,
+      "after_sync_ms": 28.144427000370342,
+      "after_batched_ms": 27.373721333181795,
+      "before_peak_MiB": 10144.252807617188,
+      "after_peak_MiB": 6237.1507568359375,
+      "accuracy": {
+        "cosine": 1.0000048875808716,
+        "rel_max": 0.0,
+        "rel_rms": 0.0,
+        "bf16_bit_diff": 0,
+        "bf16_elements": 5242880
+      },
+      "checksum_before": 1152.02490234375,
+      "checksum_after": 1152.02490234375
+    }
+  }
+}

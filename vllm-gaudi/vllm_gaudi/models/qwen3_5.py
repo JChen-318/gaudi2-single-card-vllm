@@ -41,6 +41,22 @@ from vllm_gaudi.ops.flashinfer_gaudi_adapter import (
     maybe_run_gdn_fused_decode_step,
     maybe_run_gdn_prefill,
 )
+from vllm_gaudi.models.qwen4exp.gdn_h14 import (
+    conv_weight_t as _h14_conv_weight_t,
+    gdn_conv_decode as _h14_gdn_conv_decode,
+    gdn_conv_prefill as _h14_gdn_conv_prefill,
+    gdn_gated_norm as _h14_gdn_gated_norm,
+    gdn_recur as _h14_gdn_recur,
+    h25_bf16_prefill_min_tokens as _h25_bf16_prefill_min_tokens,
+    h25_enabled as _h25_enabled,
+    h25_masked_recur_enabled as _h25_masked_recur_enabled,
+    h25_norm_max_rows as _h25_norm_max_rows,
+    h25_recur_max_tokens as _h25_recur_max_tokens,
+    h26_bf16_boundary_enabled as _h26_bf16_boundary_enabled,
+    h26_bf16_state_fp32 as _h26_bf16_state_fp32,
+    h26_chunk_solver_base as _h26_chunk_solver_base,
+    merged_in_proj as _h14_merged_in_proj,
+)
 
 # Import only for enabled runs. The runtime keeps small hybrid decode buckets
 # on the vendor graph and selects Triton only where the composite performance
@@ -122,6 +138,55 @@ def _try_triton_gdn_decode_packed(
         dt_bias.contiguous(),
         state_indices.contiguous(),
     )
+
+
+def _use_hpu_fused_norm(layer, h25: bool, core_attn_out: torch.Tensor) -> bool:
+    """Should the prefill gated norm run on Habana ``FusedRMSNorm``?
+
+    H25: that kernel owns the 3k-24k row band (T 64-512), where it beats both
+    the TPC gated norm (launch-bound above ~1k rows) and ``RMSNormGated``;
+    from ~37k rows (T >= 768) the torch norm is faster again, so the H25 rule
+    is a row *band*, not "always". A stack without the fused kernel falls back
+    to the torch norm instead of failing.
+    """
+    if layer.gdn_fused_rmsnorm_gated:
+        return True
+    if not h25 or core_attn_out.device.type != "hpu":
+        return False
+    if core_attn_out.shape[0] > _h25_norm_max_rows():
+        return False
+    return _hpu_fused_norm_available()
+
+
+def _hpu_fused_norm_available() -> bool:
+    """Whether Habana's FusedRMSNorm (H25 prefill norm) is importable."""
+    try:
+        from vllm_gaudi.extension.kernels import rms_norm
+
+        return rms_norm() is not None
+    except Exception:  # noqa: BLE001 - optional kernel
+        return False
+
+
+_COMPILED_CHUNK_SOLVER = None
+
+
+def _prefill_graph_enabled() -> bool:
+    """H30: one graph per prompt bucket for the GDN chunk solver, about 290 launches per layer otherwise."""
+    return os.environ.get("VLLM_QWEN4EXP_GDN_PREFILL_GRAPH", "0") not in ("", "0")
+
+
+def _compiled_chunk_solver():
+    global _COMPILED_CHUNK_SOLVER
+    if _COMPILED_CHUNK_SOLVER is None:
+        from vllm_gaudi.models.qwen4exp.decode_graph import raise_dynamo_cache_limits
+
+        raise_dynamo_cache_limits()  # one static graph per prompt bucket
+        _COMPILED_CHUNK_SOLVER = torch.compile(hpu_chunk_gated_delta_rule,
+                                               backend="hpu_backend",
+                                               fullgraph=False,
+                                               dynamic=False)
+    return _COMPILED_CHUNK_SOLVER
 
 
 def _save_ssm_state(core_attn_out, final_state, ssm_state, state_indices):
@@ -396,6 +461,10 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
          padding_mask_flat, num_decodes, mamba_block_size, prefill_num_seqs, prefill_seq_len, initial_state,
          direct_gdn_state, num_accepted_tokens, dflash_full_query,
          state_is_active_view, gdn_initial_state_indices) = self._extract_metadata(num_tokens)
+        # H25 dispatch umbrella (kill switch VLLM_QWEN4EXP_GDN_H25=0). Read once
+        # per call so pre-H25 behaviour can be restored without a restart-shaped
+        # code change; every H25 site below is inert when this is False.
+        h25 = _h25_enabled()
 
         # === Part 1: Input Projection ================================
         if hasattr(self, 'in_proj_qkv'):
@@ -408,8 +477,14 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             b = b.contiguous()
             a = a.contiguous()
         else:
-            mixed_qkvz, _ = self.in_proj_qkvz(hidden_states)
-            ba, _ = self.in_proj_ba(hidden_states)
+            # H14: one merged MME GEMM for qkvz+ba (cached merged weight);
+            # falls back to the two separate projections when disabled.
+            merged_proj = _h14_merged_in_proj(self, hidden_states)
+            if merged_proj is not None:
+                mixed_qkvz, ba = merged_proj
+            else:
+                mixed_qkvz, _ = self.in_proj_qkvz(hidden_states)
+                ba, _ = self.in_proj_ba(hidden_states)
 
             if self.gqa_interleaved_layout:
                 # Qwen3-Next: unpack the interleaved GQA layout
@@ -444,96 +519,144 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             else:
                 token_mask_flat = None
 
-            g, beta = hpu_fused_gdn_gating(self.A_log, a, b, self.dt_bias)
+            # H14 fused TPC prefill: conv rows + recurrence in two launches
+            # (uniform sequence spans only; varlen/other layouts keep the exact
+            # torch chunk path below). The recurrence reads the already-gathered
+            # initial_state as its slot pool (slots 0..S-1).
+            #
+            # H25: the runner always hands a bucketed prefill a
+            # ``padding_mask_flat`` (hpu_model_runner builds one whenever
+            # num_mamba_like_layers > 0), so requiring ``token_mask_flat is
+            # None`` kept *live* vllm serve on the torch conv while every
+            # offline GDN bench used the fused one. The fused conv is fed the
+            # already-masked ``mixed_qkv`` and its output is masked exactly like
+            # the torch conv output below, so the padded tail (and therefore the
+            # conv state, which comes from the masked input history) is bit-for-bit
+            # the same path. The TPC recurrence derives g/beta inside the kernel,
+            # so a padded span only qualifies when the masked form is enabled
+            # (it saturates the gating to -inf on padded rows: g = 0, beta = 0).
+            core_attn_out_result = None
+            h14_mixed_conv = None
+            if ((h25 or token_mask_flat is None) and load_state_indices is not None
+                    and store_state_indices is not None and initial_state is not None
+                    and prefill_num_seqs > 0 and prefill_seq_len > 0
+                    and prefill_num_seqs * prefill_seq_len == num_tokens
+                    and self.head_k_dim == 128 and self.head_v_dim == 128
+                    and self.conv_kernel_size == 4 and conv_state.dtype == torch.bfloat16
+                    and ssm_state.dtype == torch.bfloat16 and initial_state.dtype == torch.bfloat16
+                    and conv_state.dim() == 3 and conv_state.shape[1] == 3):
+                # H26: the conv state must be published at the last *real*
+                # token of each sequence, exactly like the torch conv below
+                # (``actual_qlens = (qsl[1:] - qsl[:-1])``; a bucketed prefill
+                # pads the span to the bucket, so the slot end is not the
+                # sequence end). ``query_start_loc_p`` already carries the
+                # actual lengths, so this costs no extra dispatch: pass it
+                # straight through and let the kernel clamp per sequence.
+                conv_out = _h14_gdn_conv_prefill(mixed_qkv, conv_state, _h14_conv_weight_t(self),
+                                                 load_state_indices, has_initial_state,
+                                                 state_stops=query_start_loc)
+                if conv_out is not None:
+                    mixed_h14, next_conv = conv_out
+                    # The torch conv reads and writes the load slot; match it.
+                    safe_conv = torch.remainder(
+                        load_state_indices.reshape(-1).to(torch.long), conv_state.shape[0])
+                    conv_state.index_copy_(0, safe_conv, next_conv)
+                    if token_mask_flat is not None:
+                        mixed_h14 = mixed_h14 * token_mask_flat
+                    h14_mixed_conv = mixed_h14
+                    # The TPC recurrence is for short spans; longer prefills
+                    # keep the MME chunk recurrence below on this conv output.
+                    recur_max = _h25_recur_max_tokens() if h25 else 16
+                    masked_recur = (h25 and token_mask_flat is not None
+                                    and _h25_masked_recur_enabled())
+                    if (token_mask_flat is None or masked_recur) and prefill_seq_len <= recur_max:
+                        seq_ids = torch.arange(prefill_num_seqs, dtype=torch.int32,
+                                               device=mixed_qkv.device)
+                        recur_out = _h14_gdn_recur(mixed_h14, a, b, self.A_log, self.dt_bias,
+                                                   initial_state.contiguous(), seq_ids,
+                                                   token_mask=token_mask_flat)
+                        if recur_out is not None:
+                            core_h14, next_ssm = recur_out
+                            safe_ssm = torch.remainder(
+                                store_state_indices.reshape(-1).to(torch.long), ssm_state.shape[0])
+                            ssm_state.index_copy_(0, safe_ssm, next_ssm)
+                            core_attn_out_result = core_h14.unsqueeze(0)
+            if core_attn_out_result is None:
+                g, beta = hpu_fused_gdn_gating(self.A_log, a, b, self.dt_bias)
 
-            conv_weights = self.conv1d.weight.view(self.conv1d.weight.size(0), self.conv1d.weight.size(2))
-            if self.gdn_token_major_causal_conv1d:
-                mixed_qkv_conv = hpu_causal_conv1d_fn_token_major(
-                    x=mixed_qkv,
-                    weight=conv_weights,
-                    bias=self.conv1d.bias,
-                    activation=self.activation,
-                    conv_states=conv_state,
-                    has_initial_state=has_initial_state,
-                    cache_indices=load_state_indices,
-                    query_start_loc=query_start_loc,
-                    block_size_to_align=mamba_block_size,
-                    is_prompt=True,
+                conv_weights = self.conv1d.weight.view(self.conv1d.weight.size(0), self.conv1d.weight.size(2))
+                if h14_mixed_conv is not None:
+                    mixed_qkv_conv = h14_mixed_conv
+                elif self.gdn_token_major_causal_conv1d:
+                    mixed_qkv_conv = hpu_causal_conv1d_fn_token_major(
+                        x=mixed_qkv,
+                        weight=conv_weights,
+                        bias=self.conv1d.bias,
+                        activation=self.activation,
+                        conv_states=conv_state,
+                        has_initial_state=has_initial_state,
+                        cache_indices=load_state_indices,
+                        query_start_loc=query_start_loc,
+                        block_size_to_align=mamba_block_size,
+                        is_prompt=True,
+                    )
+                else:
+                    mixed_qkv_conv = hpu_causal_conv1d_fn(
+                        x=mixed_qkv.transpose(0, 1),
+                        weight=conv_weights,
+                        bias=self.conv1d.bias,
+                        activation=self.activation,
+                        conv_states=conv_state,
+                        has_initial_state=has_initial_state,
+                        cache_indices=load_state_indices,
+                        block_idx_first_scheduled_token=None,
+                        block_idx_last_scheduled_token=None,
+                        initial_state_idx=None,
+                        query_start_loc=query_start_loc,
+                        block_size_to_align=mamba_block_size,
+                        num_computed_tokens=None,
+                        metadata=None,
+                        is_prompt=True,
+                    ).transpose(0, 1)
+
+                if token_mask_flat is not None:
+                    mixed_qkv_conv = mixed_qkv_conv * token_mask_flat
+
+                if self.gdn_native_qk_prep:
+                    query, key = qwen38_native_qk_prep(mixed_qkv_conv)
+                    query = query.unsqueeze(0)
+                    key = key.unsqueeze(0)
+                    value_offset = 2 * (self.key_dim // self.tp_size)
+                    value = mixed_qkv_conv.narrow(
+                        -1,
+                        value_offset,
+                        self.value_dim // self.tp_size,
+                    ).reshape(
+                        1,
+                        mixed_qkv_conv.size(0),
+                        self.num_v_heads // self.tp_size,
+                        self.head_v_dim,
+                    ).contiguous()
+                    use_qk_l2norm_in_kernel = False
+                else:
+                    query, key, value = self.rearrange_mixed_qkv(mixed_qkv_conv)
+                    use_qk_l2norm_in_kernel = True
+
+                if token_mask_flat is not None:
+                    token_mask_h = token_mask_flat.view(1, -1, 1).to(dtype=g.dtype)
+                    g = g * token_mask_h
+                    beta = beta * token_mask_h
+
+                prefill_state_in_fp32 = select_hpu_gdn_prefill_state_fp32(
+                    self.gdn_prefill_state_in_fp32,
+                    self.gdn_prefill_state_fp32_max_tokens,
+                    prefill_seq_len,
                 )
-            else:
-                mixed_qkv_conv = hpu_causal_conv1d_fn(
-                    x=mixed_qkv.transpose(0, 1),
-                    weight=conv_weights,
-                    bias=self.conv1d.bias,
-                    activation=self.activation,
-                    conv_states=conv_state,
-                    has_initial_state=has_initial_state,
-                    cache_indices=load_state_indices,
-                    block_idx_first_scheduled_token=None,
-                    block_idx_last_scheduled_token=None,
-                    initial_state_idx=None,
-                    query_start_loc=query_start_loc,
-                    block_size_to_align=mamba_block_size,
-                    num_computed_tokens=None,
-                    metadata=None,
-                    is_prompt=True,
-                ).transpose(0, 1)
-
-            if token_mask_flat is not None:
-                mixed_qkv_conv = mixed_qkv_conv * token_mask_flat
-
-            if self.gdn_native_qk_prep:
-                query, key = qwen38_native_qk_prep(mixed_qkv_conv)
-                query = query.unsqueeze(0)
-                key = key.unsqueeze(0)
-                value_offset = 2 * (self.key_dim // self.tp_size)
-                value = mixed_qkv_conv.narrow(
-                    -1,
-                    value_offset,
-                    self.value_dim // self.tp_size,
-                ).reshape(
-                    1,
-                    mixed_qkv_conv.size(0),
-                    self.num_v_heads // self.tp_size,
-                    self.head_v_dim,
-                ).contiguous()
-                use_qk_l2norm_in_kernel = False
-            else:
-                query, key, value = self.rearrange_mixed_qkv(mixed_qkv_conv)
-                use_qk_l2norm_in_kernel = True
-
-            if token_mask_flat is not None:
-                token_mask_h = token_mask_flat.view(1, -1, 1).to(dtype=g.dtype)
-                g = g * token_mask_h
-                beta = beta * token_mask_h
-
-            prefill_state_in_fp32 = select_hpu_gdn_prefill_state_fp32(
-                self.gdn_prefill_state_in_fp32,
-                self.gdn_prefill_state_fp32_max_tokens,
-                prefill_seq_len,
-            )
-            flashinfer_prefill_result = maybe_run_gdn_prefill(
-                q=query,
-                k=key,
-                v=value,
-                log_decay=g,
-                beta=beta,
-                initial_state=initial_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-                chunk_size=self.mamba_chunk_size,
-                prefill_num_seqs=prefill_num_seqs,
-                prefill_seq_len=prefill_seq_len,
-                scale=self.head_k_dim**-0.5,
-            )
-            if flashinfer_prefill_result is not None:
-                core_attn_out_result, final_state = flashinfer_prefill_result
-            else:
-                core_attn_out_result, final_state = hpu_chunk_gated_delta_rule(
+                flashinfer_prefill_result = maybe_run_gdn_prefill(
                     q=query,
                     k=key,
                     v=value,
-                    g=g,
+                    log_decay=g,
                     beta=beta,
                     initial_state=initial_state,
                     output_final_state=True,
@@ -541,29 +664,91 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     chunk_size=self.mamba_chunk_size,
                     prefill_num_seqs=prefill_num_seqs,
                     prefill_seq_len=prefill_seq_len,
-                    neumann_iters=self.gdn_neumann_iters,
-                    fused_state_matmul=self.gdn_fused_state_matmul,
-                    recursive_solver_base=self.gdn_recursive_solver_base,
-                    compact_repeated_kkt=self.gdn_compact_repeated_kkt,
-                    compile_qk_l2norm=self.gdn_compiled_qk_l2norm,
-                    qk_head_repeat_override=self.gdn_native_qk_head_repeat,
-                    compact_repeated_local_attn=self.gdn_compact_repeated_local_attn,
-                    preserve_compact_qk=self.gdn_compact_qk_input,
-                    compact_qk_factor_gate=self.gdn_compact_qk_factor_gate,
-                    state_in_fp32=prefill_state_in_fp32,
+                    scale=self.head_k_dim**-0.5,
                 )
-            assert final_state is not None
-            # State save in dynamo-disabled wrapper — index_copy_ is
-            # silently dropped by HPU torch.compile on aliased tensors.
-            core_attn_out_result = _save_ssm_state(
-                core_attn_out_result,
-                final_state,
-                ssm_state,
-                store_state_indices,
-            )
+                if flashinfer_prefill_result is not None:
+                    core_attn_out_result, final_state = flashinfer_prefill_result
+                else:
+                    # H25: the FlashQLA gate-free reformulation solves the same
+                    # unit-lower system but never materializes the pairwise gate
+                    # decay or Ag = D A0^-1 D^-1 beta, which is what the HPU
+                    # chunk path spends most of its launches on. Measured on
+                    # Gaudi2 (real Layer-0 weights, T=512): 4.09 -> 3.10 ms per
+                    # layer at |absmax| 1.9e-06 vs the FP32 production path;
+                    # every other chunk tactic measured slower (compact KKT,
+                    # compact local attention, fused state matmul, factorized
+                    # phase B -> NaN). ``None`` keeps the pre-H25 env default.
+                    #
+                    # BF16 compute is only a win once the chunk path is
+                    # MME-throughput-bound (>=1024-token spans): the state pool
+                    # is BF16 anyway, so the extra rounding is one ULP there.
+                    #
+                    # H26: the span keeps the unit-lower solve in FP32 (exact),
+                    # and the solve itself moves to the blocked recursion that
+                    # inverts the 2x2 diagonal blocks exactly instead of running
+                    # 14 Neumann iterations. Measured per-layer T=2048
+                    # 8.65 -> 4.69 ms, T=1280 5.62 -> 3.87 ms, at |rel_l2|
+                    # 2.3e-05 (FP32 solve, no BF16) / 7.7e-03 (BF16 MME)
+                    # against this FP32 configuration.
+                    chunk_compute_dtype = None
+                    chunk_solve_fp32 = None
+                    chunk_state_fp32 = prefill_state_in_fp32
+                    if h25 and prefill_seq_len >= _h25_bf16_prefill_min_tokens():
+                        chunk_compute_dtype = torch.bfloat16
+                        if _h26_bf16_boundary_enabled():
+                            chunk_solve_fp32 = True
+                        if chunk_state_fp32 is None and _h26_bf16_state_fp32():
+                            chunk_state_fp32 = True
+                    chunk_solver_base = self.gdn_recursive_solver_base
+                    if h25:
+                        chunk_solver_base = _h26_chunk_solver_base(self.mamba_chunk_size,
+                                                                   chunk_solver_base)
+                    chunk_solver = hpu_chunk_gated_delta_rule
+                    if _prefill_graph_enabled():
+                        chunk_solver = _compiled_chunk_solver()
+                    core_attn_out_result, final_state = chunk_solver(
+                        q=query,
+                        k=key,
+                        v=value,
+                        g=g,
+                        beta=beta,
+                        initial_state=initial_state,
+                        output_final_state=True,
+                        use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+                        chunk_size=self.mamba_chunk_size,
+                        prefill_num_seqs=prefill_num_seqs,
+                        prefill_seq_len=prefill_seq_len,
+                        neumann_iters=self.gdn_neumann_iters,
+                        fused_state_matmul=self.gdn_fused_state_matmul,
+                        recursive_solver_base=chunk_solver_base,
+                        compact_repeated_kkt=self.gdn_compact_repeated_kkt,
+                        compile_qk_l2norm=self.gdn_compiled_qk_l2norm,
+                        qk_head_repeat_override=self.gdn_native_qk_head_repeat,
+                        compact_repeated_local_attn=self.gdn_compact_repeated_local_attn,
+                        preserve_compact_qk=self.gdn_compact_qk_input,
+                        compact_qk_factor_gate=self.gdn_compact_qk_factor_gate,
+                        state_in_fp32=chunk_state_fp32,
+                        solve_in_fp32=chunk_solve_fp32,
+                        flashqla_reformulation=(True if h25 else None),
+                        compute_dtype=chunk_compute_dtype,
+                    )
+                assert final_state is not None
+                # State save in dynamo-disabled wrapper — index_copy_ is
+                # silently dropped by HPU torch.compile on aliased tensors.
+                core_attn_out_result = _save_ssm_state(
+                    core_attn_out_result,
+                    final_state,
+                    ssm_state,
+                    store_state_indices,
+                )
 
             non_spec_out = core_attn_out_result.squeeze(0)
-            core_attn_out[:non_spec_out.shape[0]] = non_spec_out
+            if h25 and non_spec_out.shape[0] == core_attn_out.shape[0]:
+                # Every prefill token is produced here; the zeros allocation and
+                # the full copy are pure overhead (~0.03 ms/layer at T=512).
+                core_attn_out = non_spec_out
+            else:
+                core_attn_out[:non_spec_out.shape[0]] = non_spec_out
 
         else:
             # === Part 2b: Decode =====================================
@@ -594,7 +779,35 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                                                    or load_state_indices is not store_state_indices):
                 raise RuntimeError("Triton strict GDN requires identical load/store state-index tensors")
             flashinfer_result = None
-            if _triton_gaudi_mode != "strict" and not has_dflash_state:
+            # H14 fused TPC decode: conv1d+state+SiLU and the recurrence
+            # (gating, L2-norm, delta-rule state update) in two launches.
+            # Ordinary non-spec decode only; anything else falls through to
+            # the exact paths below. State writeback keeps the torch
+            # index_copy_ form, with the kernels returning fresh state rows.
+            if (not has_dflash_state and not is_spec_decode and load_state_indices is not None
+                    and store_state_indices is load_state_indices and conv_state is not None
+                    and ssm_state is not None and num_decodes > 0 and num_tokens == num_decodes
+                    and self.head_k_dim == 128 and self.head_v_dim == 128
+                    and self.conv_kernel_size == 4 and conv_state.dtype == torch.bfloat16
+                    and ssm_state.dtype == torch.bfloat16 and conv_state.dim() == 3
+                    and conv_state.shape[1] == 3 and not state_is_active_view
+                    and not self._hpu_defer_ssm_writeback):
+                conv_out = _h14_gdn_conv_decode(mixed_qkv, conv_state, _h14_conv_weight_t(self),
+                                                load_state_indices)
+                if conv_out is not None:
+                    mixed_h14, next_conv = conv_out
+                    recur_out = _h14_gdn_recur(mixed_h14, a, b, self.A_log, self.dt_bias, ssm_state,
+                                               load_state_indices)
+                    if recur_out is not None:
+                        core_h14, next_ssm = recur_out
+                        safe_conv = torch.remainder(
+                            load_state_indices.reshape(-1).to(torch.long), conv_state.shape[0])
+                        safe_ssm = torch.remainder(
+                            load_state_indices.reshape(-1).to(torch.long), ssm_state.shape[0])
+                        conv_state.index_copy_(0, safe_conv, next_conv)
+                        ssm_state.index_copy_(0, safe_ssm, next_ssm)
+                        flashinfer_result = (core_h14.unsqueeze(0), ssm_state)
+            if _triton_gaudi_mode != "strict" and not has_dflash_state and flashinfer_result is None:
                 flashinfer_result = maybe_run_gdn_fused_decode_step(
                     mixed_qkv=mixed_qkv,
                     a=a,
@@ -740,7 +953,15 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
-        if is_prompt and self.gdn_fused_rmsnorm_gated:
+        # H14 fused gated RMSNorm (rmsnorm(y) * act(z)) in one TPC launch;
+        # RMSNormGated's grouped / norm-after-gate forms keep the torch path.
+        h14_norm_out = None
+        if (getattr(self.norm, "norm_before_gate", False) and getattr(self.norm, "group_size", None) is None):
+            h14_norm_out = _h14_gdn_gated_norm(core_attn_out, z, self.norm.weight, self.norm.eps,
+                                               self.norm.activation)
+        if h14_norm_out is not None:
+            core_attn_out = h14_norm_out
+        elif is_prompt and _use_hpu_fused_norm(self, h25, core_attn_out):
             core_attn_out = hpu_fused_rmsnorm_gated(
                 core_attn_out,
                 z,

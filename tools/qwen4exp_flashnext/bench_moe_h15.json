@@ -1,0 +1,178 @@
+{
+  "benchmark": "bench_moe_h15",
+  "geometry": {
+    "hidden": 2560,
+    "experts": 512,
+    "top_k": 10,
+    "moe_inter": 640,
+    "shared_inter": 640
+  },
+  "h15_ops": {
+    "swiglu": true,
+    "router": true,
+    "shared": true,
+    "down_epilogue": true
+  },
+  "tokens": {
+    "1": {
+      "accuracy": {
+        "router": {
+          "ids_differing": 2,
+          "weights_differing": 0,
+          "values_differing": 0,
+          "weights_numel": 10
+        },
+        "shared": {
+          "rel": 0.005235602094240838,
+          "cosine": 0.99998939037323
+        },
+        "swiglu": {
+          "differing_vs_exact": 0,
+          "differing_vs_hpu_chain": 2510,
+          "max_ulp_vs_hpu_chain": 3,
+          "numel": 6400
+        },
+        "routed_full": {
+          "differing": 0,
+          "numel": 2560
+        }
+      },
+      "timing_ms": {
+        "router.linear": 0.15446499946847325,
+        "router.topk_on_logits": 0.3551909994712332,
+        "router.softmax_cast_chain": 0.2545869992900407,
+        "router.base_full": 0.33814000016718637,
+        "router.fused_topk_on_logits": 0.10240300071018282,
+        "router.h15_full": 0.14736400044057518,
+        "shared.gate_up_linear": 0.12372400033200392,
+        "shared.silu_mul": 0.22102599996287609,
+        "shared.down_linear": 0.15207399974315194,
+        "shared.gate_linear": 0.10364299942011712,
+        "shared.sigmoid_mul": 0.15131500003917608,
+        "shared.base_full": 0.37270099983288674,
+        "shared.merged_linear_1281": 0.09541300005366793,
+        "shared.h15_epilogue": 0.08767300005274592,
+        "shared.h15_down_linear": 0.08446199990430614,
+        "shared.h15_full": 0.1671840000199154,
+        "routed.gate_gemv": 0.18284499947185395,
+        "routed.up_gemv": 0.2008559995374526,
+        "routed.silu_mul": 0.14580500010197284,
+        "routed.down_gemv": 0.24659700011397945,
+        "routed.weighted_mul": 0.1343140002063592,
+        "routed.view_sum": 0.11327299944241531,
+        "routed.base_grouped_gemv": 0.5076639999970212,
+        "routed.h15_swiglu_gemv": 0.31620899972040206,
+        "routed.h15_down_epilogue": 0.11068300045735668,
+        "routed.h15_grouped": 0.5436049996205838,
+        "moe_block.base_full": 1.1354629996276344,
+        "moe_block.h15_full": 0.5421959995146608,
+        "router.base_full_batched": 0.15676654998060258,
+        "router.h15_full_batched": 0.06879399998069857,
+        "shared.base_full_batched": 0.17877865002446924,
+        "shared.h15_full_batched": 0.1431236500138766,
+        "routed.base_grouped_gemv_batched": 0.37100575000295066,
+        "routed.h15_grouped_batched": 0.3515146999689023,
+        "moe_block.base_full_batched": 0.4858955499912554,
+        "moe_block.h15_full_batched": 0.3841456500140339
+      }
+    },
+    "4": {
+      "accuracy": {
+        "router": {
+          "ids_differing": 0,
+          "weights_differing": 0,
+          "values_differing": 0,
+          "weights_numel": 40
+        },
+        "shared": {
+          "rel": 0.013761467889908258,
+          "cosine": 0.9999730587005615
+        },
+        "swiglu": {
+          "differing_vs_exact": 0,
+          "differing_vs_hpu_chain": 9057,
+          "max_ulp_vs_hpu_chain": 3,
+          "numel": 25600
+        },
+        "routed_full": {
+          "differing": 0,
+          "numel": 10240
+        }
+      },
+      "timing_ms": {
+        "router.linear": 0.09170300018013222,
+        "router.topk_on_logits": 0.18776500019157538,
+        "router.softmax_cast_chain": 0.13890399986848934,
+        "router.base_full": 0.21919600021647057,
+        "router.fused_topk_on_logits": 0.07508199996664189,
+        "router.h15_full": 0.14696399921376724,
+        "shared.gate_up_linear": 0.09512299948255531,
+        "shared.silu_mul": 0.18930599981104024,
+        "shared.down_linear": 0.09877299999061506,
+        "shared.gate_linear": 0.07605199971294496,
+        "shared.sigmoid_mul": 0.09604299975762842,
+        "shared.base_full": 0.3110389998255414,
+        "shared.merged_linear_1281": 0.10622300032991916,
+        "shared.h15_epilogue": 0.09164299990516156,
+        "shared.h15_down_linear": 0.12489300024753902,
+        "shared.h15_full": 0.1508350005678949,
+        "routed.gate_gemv": 0.32535899936192436,
+        "routed.up_gemv": 0.3408390002732631,
+        "routed.silu_mul": 0.1505250002082903,
+        "routed.down_gemv": 0.6214979994183523,
+        "routed.weighted_mul": 0.08524199984094594,
+        "routed.view_sum": 0.08371199965040432,
+        "routed.base_grouped_gemv": 1.2186949998067576,
+        "routed.h15_swiglu_gemv": 0.6605590006074635,
+        "routed.h15_down_epilogue": 0.08166200041159755,
+        "routed.h15_grouped": 1.2493059994085343,
+        "moe_block.base_full": 1.5259439996953006,
+        "moe_block.h15_full": 1.3446290004139883,
+        "router.base_full_batched": 0.1271401999929367,
+        "router.h15_full_batched": 0.06747345000803762,
+        "shared.base_full_batched": 0.14612674999625597,
+        "shared.h15_full_batched": 0.0657464000141772,
+        "routed.base_grouped_gemv_batched": 1.0438946999784093,
+        "routed.h15_grouped_batched": 1.0850618999938888,
+        "moe_block.base_full_batched": 1.1532933500348008,
+        "moe_block.h15_full_batched": 1.1128161999749864
+      }
+    },
+    "512": {
+      "accuracy": {
+        "router": {
+          "ids_differing": 398,
+          "weights_differing": 0,
+          "values_differing": 0,
+          "weights_numel": 5120
+        },
+        "shared": {
+          "rel": 0.013605442176870748,
+          "cosine": 0.9998999834060669
+        }
+      },
+      "timing_ms": {
+        "router.linear": 0.20871600008831592,
+        "router.topk_on_logits": 0.36367099983181106,
+        "router.softmax_cast_chain": 0.28574800035130465,
+        "router.base_full": 0.45226300062495284,
+        "router.fused_topk_on_logits": 0.14617400029237615,
+        "router.h15_full": 0.19484499989630422,
+        "shared.gate_up_linear": 0.13392399978329195,
+        "shared.silu_mul": 0.24875700000848155,
+        "shared.down_linear": 0.12790400069206953,
+        "shared.gate_linear": 0.12293300005694618,
+        "shared.sigmoid_mul": 0.16315500033670105,
+        "shared.base_full": 0.37654099924111506,
+        "shared.merged_linear_1281": 0.15788499968039105,
+        "shared.h15_epilogue": 0.12441400031093508,
+        "shared.h15_down_linear": 0.12169299952802248,
+        "shared.h15_full": 0.20375599979161052,
+        "routed.prefill_grouped": 26.28897100021277,
+        "moe_block.base_full": 26.401654000437702,
+        "moe_block.h15_full_prefill_routed": 27.439584000603645
+      }
+    }
+  },
+  "failures": []
+}

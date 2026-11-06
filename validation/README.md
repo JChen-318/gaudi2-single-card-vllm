@@ -27,6 +27,8 @@ python -m pytest -q validation        # 在仓库根目录执行，约 3 分钟
 | `test_dense_decode_attn.py` | 整段计算的共享前缀注意力（`VLLM_HPU_SHARED_PREFIX_ATTN=dense`）：用生产的页表、归属与可见性生成方式，FP8/BF16 缓存、4 种矩阵乘精度组合与 float64 因果注意力参考一致；补齐的请求行输出为 0 且无 NaN；改动另一个请求的页不影响本请求 |
 | `test_v13_warmup_gc.py` | 预热按阶段 gc（`VLLM_HPU_WARMUP_PHASE_GC`）：每个分桶只读显存增量、不调用 `gc.collect()`，出错时也能退出；runner 中开关与阶段前后各一次 gc 的接入，默认关闭 |
 
+`qwen4exp/` 下是 Qwen4Exp（Qwen3.8-Flash-Next）移植的测试：`PORTING_MAP.md` 是 Strata 结构对照，`test_csf_loader.py` / `test_mixed_precision_dispatch.py` 覆盖 NVFP4(csf)/MXFP8/W4A16 三路加载，`test_nvfp4_moe_reference.py` 用编译出的 C 参考核对 4-bit MoE 内核数学，`test_nvfp4_moe_geometry.py` / `test_nvfp4_moe_ops.py` 覆盖 Track C 的 glue 几何、能力上限、权重/scale 布局名与 `available(spec)` 选择契约（`native/qwen4exp-nvfp4-moe/qwen4exp_nvfp4_moe_ops.py`，纯 Python、不 import HPU 后端；TPC simulator 的逐位/延迟数据由 `qwen4exp_nvfp4_moe_sim` 与 `qwen4exp_nvfp4_moe_latency` 给出），`test_qwen4_exp_registry.py` 核对架构注册与按 prefix 的量化分派，`test_prefill_grouped_moe.py` 覆盖 expert-major 分组预填充 GEMM（`apply_routed_experts_grouped`，对应 Strata 的 bucket→grouped GEMM→join）与逐 expert 循环的数值一致性和退化路由，`VLLM_QWEN4EXP_MOE_PREFILL_GROUPED=0` 可退回循环。`test_full_checkpoint_load.py` 在 meta 设备上按真实 48 层配置建模型并跑一遍生产的 `load_weights`（真实索引 301,759 个张量、形状取自 safetensors 头，`Tensor.copy_` 换成分辨形状的记录桩，不搬数据），用来抓 serve 时才会暴露的名字/几何问题（例如 `--language-model-only` 下 `model.visual.*` 一度让加载中止）；该用例需要检查点，因此由 `VLLM_QWEN4EXP_FULL_LOAD=1` 开启，`../run_hpu_verify.sh` 已导出。`hpu_device_smoke.py` 和 `../run_hpu_verify.sh` 是接上 Gaudi2 后的实机入口（无设备时 exit 3）。
+
 `core/` 下的测试用到 vLLM 本体（本仓库的 `vllm-core/` 或已安装的 vLLM）和它的依赖，需要在装好服务的环境里跑；不加载平台插件、不碰设备：
 
 ```bash

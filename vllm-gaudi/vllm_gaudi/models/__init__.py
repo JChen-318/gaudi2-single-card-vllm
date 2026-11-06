@@ -5,6 +5,8 @@ def register_model():
     ModelRegistry.register_model("DeepseekV41ForCausalLM", "vllm_gaudi.models.deepseek_v41:HpuDeepseekV41ForCausalLM")
     ModelRegistry.register_model("DSparkV41DraftModel", "vllm_gaudi.models.deepseek_v41_program:PreparedDraft")
     import vllm_gaudi.models.deepseek_v41_loader  # noqa: F401
+    import vllm_gaudi.models.qwen4exp.loader  # noqa: F401
+    import vllm_gaudi.models.qwen4exp.mixed_loader  # noqa: F401
     from vllm_gaudi.models.gemma3_mm import HpuGemma3ForConditionalGeneration  # noqa: F401
     ModelRegistry.register_model(
         "Gemma3ForConditionalGeneration",  # Original architecture identifier in vLLM
@@ -52,6 +54,19 @@ def register_model():
 
     from vllm_gaudi.models.qwen3_moe import HpuQwen3MoeForCausalLM  # noqa: F401
     ModelRegistry.register_model("Qwen3MoeForCausalLM", "vllm_gaudi.models.qwen3_moe:HpuQwen3MoeForCausalLM")
+
+    # Qwen4Exp (Qwen3.8-Flash-Next): trunk + torch QSA + MTP draft class.
+    # The model composes the qwen4exp/ primitives and adds Track B residency
+    # (packed NVFP4 experts), Track C decode GEMV and host-offloaded PLE
+    # tables (VLLM_PLE_CPU_OFFLOAD). qwen4exp/model.py stays importable and is
+    # its superclass, so the MTP draft and the tools/ tests keep working.
+    # The HPU proposer still targets Qwen3_5MTP; wiring Qwen4ExpMTP is Phase 3.
+    ModelRegistry.register_model("Qwen4ExpForCausalLM",
+                                 "vllm_gaudi.models.qwen4_exp:Qwen4ExpForCausalLM")
+    ModelRegistry.register_model("Qwen4ExpForConditionalGeneration",
+                                 "vllm_gaudi.models.qwen4_exp:Qwen4ExpForConditionalGeneration")
+    ModelRegistry.register_model("Qwen4ExpMTP",
+                                 "vllm_gaudi.models.qwen4exp.mtp:Qwen4ExpMTP")
 
     from vllm_gaudi.models.llama4 import HpuLlama4ForConditionalGeneration  # noqa: F401
     ModelRegistry.register_model("Llama4ForConditionalGeneration",
