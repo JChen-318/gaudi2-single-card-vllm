@@ -19,6 +19,7 @@
 | `VISION_MAX_IMAGES` | 4 | 每个请求最多几张图 |
 | `VISION_MAX_PIXELS` | 1048576 | 图片缩放后的最大像素数（约 1024×1024，最多 1024 个图片 token）。每 32×32 像素一个 token，一张图的 token 要放进一个 2048 token 的 prefill 段，所以不要超过约 200 万 |
 | `VISION_BUCKETS` | `256,576,1024,1600,2304,3136,4096` | 视觉编码器的固定尺寸（patch 数，每 16×16 像素一个 patch）。每张图补齐到不小于它的最小一档，预热时每档编译一次；比最大一档还大的图按原尺寸计算（首次会现编译） |
+| `API_MONITOR` | 0 | 1 = 打开请求监控页 `http://HOST:PORT/api-monitor`（见下文「请求监控」）。会在内存里保留最近 100 个请求的输入和输出，直到重启 |
 | `PROFILER_DIR` | 空 | 非空时开启 torch profiler 的 `/start_profile`、`/stop_profile`，trace 写到这个目录（诊断用，见 tools/README.md） |
 | `PRIME_AFTER_START` | 1 | `--daemon` 启动后，等 `/health` 正常再发几组单路、两路请求（`tools/prime.py`），让预热没覆盖的形状在启动阶段编译。0 = 关闭 |
 | `PIN_MAIN_CPU` | 空 | 预热后把引擎主线程固定到这个 CPU，并让其他线程避开它和它的超线程兄弟。选一个空闲的物理核，约省 0.3 ms/轮 |
@@ -27,6 +28,21 @@
 | `STEP_LOG` | 空 | 设为文件路径后，每轮 decode 记一行主机计时（`tools/trace/steps_stats.py` 可读）。长期运行会持续变大，只在测速时打开 |
 
 `scripts/serve.sh --skip-warmup` 跳过预热（约 6 分钟可用，只用于功能检查）。
+
+## 请求监控
+
+`API_MONITOR=1` 时，`serve.sh` 给 vLLM 加一个 ASGI 中间件（`vllm-gaudi/vllm_gaudi/entrypoints/api_monitor/`，`--middleware`），页面仿照 Strata 的 API Monitor：
+
+- **引擎**：空闲 / prefill / 生成中，模型名和上下文长度；投机解码每轮平均接受的 token 数和各草稿位置的接受率；前缀缓存命中率；KV 缓存占用和运行、排队的请求数。都来自 vLLM 自己的 Prometheus 计数（与 `/metrics` 同源），自启动以来累计。
+- **加速卡**：温度、功率、显存和 AIP 利用率，来自 `hl-smi`。只在页面打开时读取，最多每 5 秒一次。
+- **请求**：最近 100 个发往 `/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/messages` 的请求，每个请求有输入、输出、思考内容和原始响应（每项最多保留 25.6 万字符，内联图片只记大小），以及耗时、首 token、token 数、命中前缀缓存的 token 数、prefill 速度（实际计算的 prompt token ÷ 首 token 时间，与 llm_speedtest 等客户端测速同一口径；命中缓存的部分不算）、decode 速度、每轮接受数。
+
+说明：
+
+- 返回给客户端的内容不变。唯一的改动在请求上：没要 usage 的流式 chat / completion 请求，会被加上 `stream_options.include_usage`，多出的 usage 块在返回前删掉，这样能拿到准确的 token 数。
+- 排队、prefill、decode 时间、缓存命中和接受数是请求开始与结束时 vLLM 计数之差，只有请求单独运行时才属于它。和其他请求有重叠的请求不显示这几项（token 数照常显示）。
+- 数据只在服务进程内存里，重启即清空。设置了 `API_KEY` 时，`/api/requests` 和 `/api/monitor/status` 需要同一个 key（页面右上角 API key 按钮）；页面本身不含数据。`HOST=0.0.0.0` 且没有 `API_KEY` 时，局域网里任何人都能看到请求内容。
+- 数据接口：`GET /api/monitor/status`；`GET /api/requests`（不含正文）；`GET /api/requests?id=<id>`（单个请求的全部内容）。
 
 ## 改并发数或上下文长度
 

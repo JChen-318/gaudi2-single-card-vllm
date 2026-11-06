@@ -36,6 +36,7 @@ VLLM_PLUGINS=none TORCH_DEVICE_BACKEND_AUTOLOAD=0 PYTHONPATH=vllm-gaudi .venv/bi
 | 文件 | 覆盖内容 |
 |---|---|
 | `core/test_prefix_state_cache.py` | 前缀缓存（`VLLM_HPU_PREFIX_STATE_CACHE`）：在 vLLM 真实的 KV 缓存管理器上（目标、草稿两个注意力组 + 两个 GDN 组，align 模式，每请求 7 个投机块），多轮续写命中上一轮提示词末尾的快照，中途分叉时退到更早的快照，快照被挤掉后不命中，无快照时即使注意力 KV 还在也不命中；投机 decode 之后下一轮仍能命中；DFlash 的 EAGLE 标记被清除；被抢占的请求恢复时也恢复状态；同一步里恢复和保存不会用到同一个槽位；分段在快照位置停下；runner 侧只复制每组的基础状态行 |
+| `core/test_api_monitor.py` | 请求监控（`API_MONITOR`，不需要 vLLM，只需 `pytest`）：客户端收到的流与原样一致（为统计补上的 usage 块被删掉，客户端自己要的 usage 保留）、事件跨分块时能拼回、非流式响应字节不变；Chat、Responses、Anthropic 三种流的输出、思考、usage 和结束原因；单独运行的请求取到排队/prefill/decode 时间、缓存命中与接受数，重叠的请求不取；断开与异常的状态；内联图片只记大小；其他路由不经过；页面资源、数据接口与 API key；Prometheus 计数读取（装了 `prometheus_client` 时）与 `hl-smi` 解析 |
 | `core/test_prefill_buckets_slicing.py` | 细分上下文分桶（`VLLM_HPU_PROMPT_FINE_CTX_STEP`）只加给最大的 query、查找取到最近的桶、冻结的每 query 上下文索引；分片 prefill 注意力（`VLLM_HPU_PREFILL_SPLIT_ATTN`）用 CPU 替身 kernel 与稠密 softmax 注意力一致（GQA、补齐页填大值、归一化常数因子可抵消），以及适用条件 |
 
 `dynamo/` 下是两个断图的复现与检查脚本，需要与服务器同主版本的 torch（这里用的是 2.11）：

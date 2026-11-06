@@ -77,6 +77,9 @@ if [ -n "${PROFILER_DIR:-}" ]; then
   ARGS+=(--profiler-config "{\"profiler\":\"torch\",\"torch_profiler_dir\":\"$PROFILER_DIR\",\"torch_profiler_use_gzip\":true}")
   EXTRA+=(VLLM_PROFILER_ENABLED=full)
 fi
+# Request monitor at /api-monitor (docs/CONFIG.md): the last 100 requests' prompts and answers in memory, with the
+# engine's counters and the card's hl-smi readings. Added after the request guard, so it is the outermost middleware.
+[ "${API_MONITOR:-0}" = 1 ] && ARGS+=(--middleware vllm_gaudi.entrypoints.api_monitor.ApiMonitor)
 # Prefix caching (section 18): attention KV through vLLM's prefix cache, GDN states as device snapshots
 if [ "${PREFIX_CACHE:-1}" = 1 ]; then
   ARGS+=(--enable-prefix-caching)

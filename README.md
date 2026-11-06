@@ -187,6 +187,8 @@ Edit **[`config/serve.env`](config/serve.env.example)** for model paths, the end
 
 `DATA_DIR` holds logs, runtime controls, and compile caches. Cache paths include native-library hashes, so rebuilding kernels selects a fresh cache. After source updates, rerun installation if dependencies changed, rebuild native libraries if their sources changed, and restart. See the [configuration guide](docs/CONFIG.md) for tuning flags and systemd setup.
 
+**Monitor page.** With `API_MONITOR=1` in `serve.env`, `http://HOST:PORT/api-monitor` shows the engine (draft acceptance, prefix-cache hit rate, KV-cache use), the card (temperature, power, memory via `hl-smi`) and the last 100 requests with their input, output, timings, and prefill/decode speed. Prompts and answers stay in the server's memory until a restart; with `API_KEY` set, the page's data needs the same key. Details in the [configuration guide](docs/CONFIG.md#请求监控).
+
 ```bash
 scripts/bench.sh          # Single-stream, two-stream, and ~30K-context checks
 scripts/bench.sh --full   # Also run the 15-category prompt suite
