@@ -71,14 +71,20 @@ def dense(q, k, v, bias, scale):
 split = pytest.importorskip("vllm_gaudi.extension.prefill_split_attn")
 
 
-def cpu_sdpa_gqa(q, k, v, mask, scale, softmax_mode):
-    """CPU stand-in for sdpa_recomp_fwd on GQA-shaped inputs, same (output, max, 1/sum) contract."""
+def cpu_sdpa_gqa(q, k, v, mask, scale, softmax_mode, is_causal=False):
+    """CPU stand-in for sdpa_recomp_fwd on GQA-shaped inputs, same (output, max, 1/sum) contract. ``is_causal``
+    (square blocks only) applies the lower triangle as the kernel's causal mode does."""
+    if is_causal:
+        assert mask is None and q.shape[-2] == k.shape[-2]
+        n = q.shape[-2]
+        mask = torch.triu(torch.full((n, n), -math.inf), diagonal=1)
     out, m, linv = cpu_chunk_kernel(q, k, v, mask, 0.0, scale, False, softmax_mode)
     return out, m, linv * 0.25  # a constant factor in the normaliser must cancel
 
 
+@pytest.mark.parametrize("diag_causal", [False, True])
 @pytest.mark.parametrize("ctx_real,prefix_slices", [(5 * 64 - 7, 5), (4 * 64 + 1, 5), (3 * 64, 3)])
-def test_split_attention_matches_dense(ctx_real, prefix_slices):
+def test_split_attention_matches_dense(ctx_real, prefix_slices, diag_causal):
     """Scaled down: 64-key slices, a 48-token chunk, GQA 6 query heads over 2 KV heads. Padding (large values)
     fills the context from ctx_real to the end of the last slice."""
     slice_size, q_len, kv_heads, group, dim = 64, 48, 2, 3, 16
@@ -93,7 +99,8 @@ def test_split_attention_matches_dense(ctx_real, prefix_slices):
     bias[..., ctx_real:prefix] = -math.inf
     bias[..., prefix:] = torch.triu(torch.full((q_len, q_len), -math.inf), diagonal=1)
     scale = dim**-0.5
-    got = split.split_attention(q, k, v, bias, scale, slice_size=slice_size, sdpa=cpu_sdpa_gqa)
+    got = split.split_attention(q, k, v, bias, scale, slice_size=slice_size, sdpa=cpu_sdpa_gqa,
+                                diag_causal=diag_causal)
     want = dense(q, k.repeat_interleave(group, dim=1), v.repeat_interleave(group, dim=1), bias, scale)
     assert got.shape == q.shape
     assert torch.allclose(got, want, atol=2e-5, rtol=1e-4)

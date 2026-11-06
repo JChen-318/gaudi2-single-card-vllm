@@ -8,12 +8,16 @@ into the batch dimension instead, so one kernel call covers all of them and the 
 - clean slices: every slice of the context except the last, no bias (one batched call);
 - edge slice: the last context slice with its bias (bucket padding sits right before the query tokens and, for the
   shapes accepted by ``eligible``, never reaches further back than one slice);
-- diagonal: the chunk against itself with its causal bias;
+- diagonal: the chunk against itself with its causal bias, or with the kernel's causal mode and no bias
+  (VLLM_HPU_PREFILL_SPLIT_DIAG_CAUSAL=1: the same mask, without materialising and adding a [chunk, chunk] bias);
 - the partial results are merged with their row maxima and normalisers (online softmax).
 """
+import os
+
 import torch
 
 SLICE = 8192
+DIAG_CAUSAL = os.environ.get("VLLM_HPU_PREFILL_SPLIT_DIAG_CAUSAL", "0").lower() in ("1", "true")
 
 
 def eligible(query, key, attn_bias, is_causal, max_query, min_prefix, slice_size=SLICE) -> bool:
@@ -27,18 +31,27 @@ def eligible(query, key, attn_bias, is_causal, max_query, min_prefix, slice_size
     return q_len == max_query and prefix >= max(min_prefix, 2 * slice_size) and prefix % slice_size == 0
 
 
-def _sdpa(q, k, v, mask, scale, softmax_mode):
+def _sdpa(q, k, v, mask, scale, softmax_mode, is_causal=False):
     """FusedSDPA forward on GQA-shaped inputs: normalised output (input dtype; the stacked slices make it the
     largest tensor here, so it is not widened), row max and the normaliser (float32). The normaliser of the "fast"
-    mode carries a constant factor; it is the same for every call, so it cancels in the merge."""
-    out, m, linv = torch.ops.hpu.sdpa_recomp_fwd(q, k, v, mask, 0.0, scale, False, True, softmax_mode, None,
+    mode carries a constant factor; it is the same for every call, so it cancels in the merge. ``is_causal`` (with
+    ``mask=None``) is only used for square blocks, where the kernel's causal mask is the plain lower triangle."""
+    out, m, linv = torch.ops.hpu.sdpa_recomp_fwd(q, k, v, mask, 0.0, scale, is_causal, True, softmax_mode, None,
                                                  'right')[:3]
     return out, m.to(torch.float32), linv.to(torch.float32)
 
 
-def split_attention(query, key, value, attn_bias, scale, softmax_mode='fast', slice_size=SLICE, sdpa=_sdpa):
+def split_attention(query, key, value, attn_bias, scale, softmax_mode='fast', slice_size=SLICE, sdpa=_sdpa,
+                    diag_causal=None):
     """query ``[1, Hq, q, D]``; key/value ``[1, Hkv, prefix + q, D]`` (context then chunk); attn_bias
-    ``[1, 1, q, prefix + q]``. Returns ``[1, Hq, q, D]`` in the query dtype."""
+    ``[1, 1, q, prefix + q]``. Returns ``[1, Hq, q, D]`` in the query dtype.
+
+    ``diag_causal`` (default: VLLM_HPU_PREFILL_SPLIT_DIAG_CAUSAL) computes the diagonal block with the kernel's
+    causal mode. The diagonal bias is exactly the causal triangle: the chunk is the full largest query (see
+    ``eligible``), and a padded tail of the chunk only holds rows and keys after every real token, which the
+    triangle already hides from the real rows."""
+    if diag_causal is None:
+        diag_causal = DIAG_CAUSAL
     batch, q_heads, q_len, head_dim = query.shape
     kv_heads = key.shape[1]
     group = q_heads // kv_heads
@@ -59,8 +72,12 @@ def split_attention(query, key, value, attn_bias, scale, softmax_mode='fast', sl
     o1, m1, l1 = sdpa(q_rep, stacked(kg), stacked(vg), None, scale, softmax_mode)
     o2, m2, l2 = sdpa(qg, kg[..., clean:prefix, :].contiguous(), vg[..., clean:prefix, :].contiguous(),
                       bias[..., clean:prefix].contiguous(), scale, softmax_mode)
-    o3, m3, l3 = sdpa(qg, kg[..., prefix:, :].contiguous(), vg[..., prefix:, :].contiguous(),
-                      bias[..., prefix:].contiguous(), scale, softmax_mode)
+    if diag_causal:
+        o3, m3, l3 = sdpa(qg, kg[..., prefix:, :].contiguous(), vg[..., prefix:, :].contiguous(), None, scale,
+                          softmax_mode, is_causal=True)
+    else:
+        o3, m3, l3 = sdpa(qg, kg[..., prefix:, :].contiguous(), vg[..., prefix:, :].contiguous(),
+                          bias[..., prefix:].contiguous(), scale, softmax_mode)
 
     m_max = torch.maximum(torch.maximum(m2, m3), m1.amax(dim=0, keepdim=True))
     w1 = torch.exp(m1 - m_max) / l1
