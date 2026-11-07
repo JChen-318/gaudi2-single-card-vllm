@@ -101,7 +101,7 @@ Each step below was added cumulatively and measured on the same 5-second request
 | Row-max-free softmax: q/k are RMS-normalised, so the Cauchy–Schwarz bound replaces the row max; one compiled graph per 2,560-query chunk | 103.2 s |
 | VAE attention with fast softmax and aligned keys | **100.6 s** |
 
-Attention is now about 315 ms per layer against a floor of about 262 ms for its two matrix products on the MME. The query–key product has head dimension 128, so the MME reaches only about 28% of peak on it. Block-sparse attention, K/V pooling, FP8 attention products, polynomial and bit-trick exponentials, and other tilings were measured and rejected. Details: [optimization log §23](docs/OPTIMIZATION.md#23-vllm-omni-媒体模型minimax-h3-的-dit-注意力).
+Attention is now about 300–315 ms per layer. Its two matrix products need only about 180 ms on the MME. The rest is the score matrix making four trips through HBM, about 640 GB per layer at roughly 2 TB/s. Tile shapes where the graph compiler keeps the score tile in SRAM do not help: there the TPC exponential becomes an equally high limit (282 ms for QK^T → exp → row sum). Block-sparse attention, K/V pooling, FP8 attention products, polynomial and bit-trick exponentials, graph-compiler slicing knobs, two-graph splits, and other tilings were measured and rejected. Details: [optimization log §23](docs/OPTIMIZATION.md#23-vllm-omni-媒体模型minimax-h3-的-dit-注意力).
 
 **Qwen-Image 2.1**: 3.59 s server-side at 1024² (3 DiT steps of about 0.32 s each once warm), 17.0 s at 1536², 41.6 s at 2048², about 7.0 s for an image edit. The changes are:
 - Text tokens padded to 64-token buckets, so compiled graphs are reused across prompts; padded rows are skipped on the RoPE frame axis.

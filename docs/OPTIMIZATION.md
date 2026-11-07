@@ -827,6 +827,25 @@ H3 视频 VAE 解码器里有 transformer block（每块 1797 个 token，32 头
 
 H3 部署打开 fast + 对齐 128。
 
+### 23.8a 注意力的真实瓶颈（更正 23.5）
+
+23.5 的单独计时把结果写回 HBM，高估了 MME、低估了数据搬运。放进同一个编译图后（真实 q/k/v，56 头，单层，按 query 分块）：
+
+| 图内容 | 2560 行一块 | 128 行一块 |
+|---|---:|---:|
+| 只做 QK | 102 ms（200 TFLOPS） | 150 ms |
+| QK → 行求和 | 161 ms | **101 ms**（分数留在 SRAM） |
+| QK → exp → 行求和 | 276 ms | 282 ms |
+| 完整（含 PV） | **302 ms** | 630 ms |
+| PV 单独 | 77 ms | — |
+
+- 2560 行一块（生产）：分数矩阵 S 和概率矩阵 P 各写一次、读一次 HBM，每层约 640 GB，按约 2 TB/s 正好约 300 ms。exp 换成一次乘法同样是 311 ms。
+- 128 行一块：图编译器把"MME → TPC 归约"留在 SRAM，QK→求和与只做 QK 一样快。但这时 exp 本身成了约 280 ms 的墙：片上加减乘只多 0–8 ms，exp 多 180 ms，exp2 和 FP16 exp 更慢。
+- 只要 TPC 输出还要再进 MME（PV），编译器就写回 HBM。拆成两个图（QK→exp→求和、PV）为 353–425 ms，更慢。
+- 图编译器开关（`ENABLE_EXPERIMENTAL_FLAGS` 下的 `ENABLE_LAYERED_BRAIN_ATTENTION_SEEDS`、`..._MULTI_MME_ATTENTION_SEEDS`、`MULTI_MME_ATTENTION_GEMM_CD/SPATIAL_THRESHOLD`、`ENABLE_FLASH_ATTENTION_SLICING`、`ENABLE_LAYERED_PIPELINE_BRAIN`、`ENABLE_PIPELINE_MANAGEMENT`、`ENABLE_SRAM_MULTI_BUFFERING`、`ENABLE_TPC_BUNDLES`、`SRAM_SLICER_BATCHGEMM_MAX_BATCH_SIZE`、多维切片等）对这些图都无变化。`ENABLE_HUGE_TENSOR_SLICING=0` 时编译失败。
+
+要明显低于 300 ms，需要同时满足两点：一是更便宜的 exp（自写 TPC 内核）；二是 P 不经 HBM 直接进入 PV。后者需要控制 MME，做不到。只做前者，估计单层 230–250 ms、整段视频约省 10 s，未做。
+
 ### 23.9 H3 最终结果（正式启动脚本，5 秒 1344×768，4 步 LightX2V Turbo）
 
 | | 耗时 |
