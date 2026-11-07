@@ -45,6 +45,99 @@ def merge_kv_split(o1: torch.Tensor, m1: torch.Tensor, l1: torch.Tensor, o2: tor
     return torch.addcmul(o1, o2 - o1, share)
 
 
+# Max-free softmax (opt-in, VLLM_GAUDI_OMNI_SDPA_MAXFREE=1). On Gaudi2 the attention of a long DiT sequence is limited
+# by the TPC (exp over N^2 scores), not the MME. With RMS-normalised q/k the scores are bounded, so each row can use the
+# precomputable Cauchy-Schwarz bound b_i = |q_i| * max_j |k_j| * scale instead of its running max: no max pass, no
+# rescaling, and the chunked Q.K^T -> exp -> P.V graph runs 20% faster than FusedSDPA (H3, 37,750 rows: 323 ms instead of
+# about 400 ms per layer, error against FP32 0.6-0.7% instead of 0.9-1.0%). It needs b_i - rowmax_i well below ~80 so
+# that exp(s - b) does not underflow: H3 layers 45, 48 and 49 hold outlier tokens (scores up to 9000) and must keep
+# FusedSDPA, which VLLM_GAUDI_OMNI_SDPA_MAXFREE_SKIP_LAYERS lists (block indices of the DiT, comma separated).
+HPU_SDPA_MAX_FREE = os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE", "0") == "1"
+HPU_SDPA_MAX_FREE_CHUNK = int(os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE_CHUNK", "2560"))
+HPU_SDPA_MAX_FREE_SKIP = frozenset(
+    int(x) for x in os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE_SKIP_LAYERS", "").replace(" ", "").split(",") if x)
+HPU_SDPA_MAX_FREE_MIN_KV = 4096
+
+
+def _max_free_chunk(qc: torch.Tensor, key: torch.Tensor, value: torch.Tensor, bound: torch.Tensor,
+                    pad: float) -> torch.Tensor:
+    scores = torch.matmul(qc, key.transpose(-1, -2))
+    # The clamp only guards against an unexpected outlier (exp overflow); in range it changes nothing.
+    probs = torch.exp(torch.clamp(scores - bound, max=30.0))
+    row_sum = probs.sum(-1, keepdim=True, dtype=torch.float32)
+    if pad:  # zero-padded keys score 0: each added exp(-b) to the sum and nothing to the numerator
+        row_sum = row_sum - pad * torch.exp(-bound.float())
+    return (torch.matmul(probs, value).float() / row_sum.clamp(min=1e-30)).to(qc.dtype)
+
+
+_MAX_FREE_CHUNK_COMPILED = None
+
+
+def _chunk_fn(device_type: str):
+    """One compiled graph per query chunk. The chunk loop must stay out of any enclosing graph: compiled as a single
+    graph (for example inside a regionally compiled DiT block) the graph compiler allocates every chunk's scores at
+    once and fails or falls back to a slow schedule (H3: DiT forward 23 -> 47 s)."""
+    global _MAX_FREE_CHUNK_COMPILED
+    if device_type != "hpu":
+        return _max_free_chunk
+    if _MAX_FREE_CHUNK_COMPILED is None:
+        _MAX_FREE_CHUNK_COMPILED = torch.compile(_max_free_chunk, backend="hpu_backend", dynamic=False)
+    return _MAX_FREE_CHUNK_COMPILED
+
+
+@torch.compiler.disable
+def max_free_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, scale: float,
+                       chunk: int = HPU_SDPA_MAX_FREE_CHUNK) -> torch.Tensor:
+    """Softmax attention without a row max. query/key/value [B, H, L, D], same head count. Keys/values are
+    zero-padded to a multiple of 128 (the unaligned length is slower on the MME) and the row sums are corrected
+    exactly for the padding; queries are processed in chunks to bound the score memory (H*chunk*keys)."""
+    q_scaled = query * scale
+    key_max = key.float().norm(dim=-1).amax(-1, keepdim=True)  # [B, H, 1]
+    bound = (q_scaled.float().norm(dim=-1) * key_max).to(query.dtype).unsqueeze(-1)  # [B, H, L, 1]
+    pad = -key.shape[-2] % 128
+    if pad:
+        key = torch.nn.functional.pad(key, (0, 0, 0, pad))
+        value = torch.nn.functional.pad(value, (0, 0, 0, pad))
+    rows = query.shape[-2]
+    run = _chunk_fn(query.device.type)
+    outs = [
+        run(q_scaled[..., i:i + chunk, :], key, value, bound[..., i:i + chunk, :], float(pad))
+        for i in range(0, rows, chunk)
+    ]
+    return outs[0] if len(outs) == 1 else torch.cat(outs, dim=-2)
+
+
+def mark_max_free_layers(pipeline: object) -> int:
+    """Enable the max-free path on the self-attention of every repeated DiT block except the skipped indices.
+    Returns the number of enabled attention layers."""
+    if not HPU_SDPA_MAX_FREE:
+        return 0
+    from torch import nn
+
+    modules = list(pipeline.named_modules()) if isinstance(pipeline, nn.Module) else []
+    if not modules:
+        for attr in getattr(pipeline, "_dit_modules", None) or ("transformer", "transformer_2"):
+            model = getattr(pipeline, attr, None)
+            if isinstance(model, nn.Module):
+                modules.extend(model.named_modules())
+    enabled = 0
+    for _, model in modules:
+        block_names = set(getattr(model, "_repeated_blocks", None) or ())
+        if not block_names:
+            continue
+        index = 0
+        for _, block in model.named_modules():
+            if type(block).__name__ not in block_names:
+                continue
+            for sub in block.modules():
+                impl = getattr(sub, "attention", None)
+                if isinstance(impl, HPUSDPAImpl):
+                    impl._vllm_gaudi_max_free = index not in HPU_SDPA_MAX_FREE_SKIP
+                    enabled += int(impl._vllm_gaudi_max_free)
+            index += 1
+    return enabled
+
+
 def additive_mask(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     """Boolean "may attend" mask -> additive bias (0 / -inf) in the query dtype. FusedSDPA takes a boolean mask on a
     much slower path for some lengths (Qwen-Image 2.1 decode, 4032 queries x 4096 keys: 70 ms instead of 4 ms per
@@ -112,6 +205,19 @@ class HPUSDPAImpl(SDPAImpl):
             raise RuntimeError("HPU_SDPA received a non-HPU attention mask; implicit host fallback is disabled")
 
         query = query[:, :q_length].permute(0, 2, 1, 3).contiguous()
+        if (HPU_SDPA_MAX_FREE and getattr(self, "_vllm_gaudi_max_free", False) and attention_mask is None
+                and not self.causal and kv_length >= HPU_SDPA_MAX_FREE_MIN_KV):
+            key = key[:, :kv_length].permute(0, 2, 1, 3).contiguous()
+            value = value[:, :kv_length].permute(0, 2, 1, 3).contiguous()
+            if key.shape[1] != query.shape[1]:
+                key = key.repeat_interleave(query.shape[1] // key.shape[1], dim=1)
+                value = value.repeat_interleave(query.shape[1] // value.shape[1], dim=1)
+            scale = self.softmax_scale if self.softmax_scale is not None else query.shape[-1]**-0.5
+            output = max_free_attention(query, key, value, scale).permute(0, 2, 1, 3)
+            if q_length < original_q_length:
+                output = torch.cat((output, output.new_zeros(output.shape[0], original_q_length - q_length,
+                                                             output.shape[2], output.shape[3])), dim=1)
+            return output
         split = kv_split_point(kv_length) if attention_mask is None and not self.causal else 0
         if split:
             output = self._split_kv_forward(query, key, value, split, kv_length)
@@ -182,4 +288,4 @@ class HPUSDPAImpl(SDPAImpl):
 
 
 __all__ = ["HPU_SDPA_KV_ALIGN", "HPU_SDPA_SOFTMAX_MODE", "HPUSDPABackend", "HPUSDPAImpl", "additive_mask",
-           "kv_split_point", "merge_kv_split"]
+           "kv_split_point", "mark_max_free_layers", "max_free_attention", "merge_kv_split"]

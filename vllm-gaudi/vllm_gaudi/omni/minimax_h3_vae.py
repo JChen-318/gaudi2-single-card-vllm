@@ -27,6 +27,7 @@ _H3_VAE_COMPILE_BLOCKS_ENV = "VLLM_GAUDI_H3_VAE_COMPILE_BLOCKS"
 _H3_VAE_FUSED_SDPA_ENV = "VLLM_GAUDI_H3_VAE_FUSED_SDPA"
 _H3_VAE_ASYNC_D2H_ENV = "VLLM_GAUDI_H3_VAE_ASYNC_D2H"
 _H3_VAE_TEMPORAL_BATCH_SIZE_ENV = "VLLM_GAUDI_H3_VAE_TEMPORAL_BATCH_SIZE"
+_H3_VAE_SOFTMAX_MODE_ENV = "VLLM_GAUDI_H3_VAE_SOFTMAX_MODE"
 _DEFAULT_H3_VAE_TILE_BATCH_SIZE = 4
 _DEFAULT_H3_VAE_TEMPORAL_BATCH_SIZE = 2
 
@@ -368,6 +369,33 @@ def _h3_vae_fused_sdpa(
     query = query.transpose(1, 2)
     key = key.transpose(1, 2)
     value = value.transpose(1, 2)
+    # The decoder's self-attention is most of the decode time (H3 1344x768: about 11 of 14 s, softmax on the TPC
+    # the largest part); VLLM_GAUDI_H3_VAE_SOFTMAX_MODE=fast selects the faster softmax, "None" keeps the default.
+    softmax_mode = os.environ.get(_H3_VAE_SOFTMAX_MODE_ENV, "None")
+    if softmax_mode not in {"None", "fast", "fp32"}:
+        raise ValueError(f"{_H3_VAE_SOFTMAX_MODE_ENV} must be 'None', 'fast' or 'fp32', got {softmax_mode!r}")
+    # Each decoder tile attends over 1797 tokens, not a multiple of 128, which FusedSDPA runs much slower (see
+    # vllm_gaudi/omni/attention.py). VLLM_GAUDI_H3_VAE_KV_ALIGN=128 runs the aligned key head and the short tail as two
+    # calls on contiguous tensors and merges them exactly; 0 keeps one call on the transposed views.
+    align = int(os.environ.get("VLLM_GAUDI_H3_VAE_KV_ALIGN", "0"))
+    keys = key.shape[2]
+    if align > 0 and keys % align and keys > align:
+        head = keys // align * align
+        scale = query.shape[-1]**-0.5
+        q = query.contiguous()
+
+        def part(start: int, stop: int):
+            return torch.ops.hpu.sdpa_recomp_fwd(q, key[:, :, start:stop].contiguous(), value[:, :, start:stop].contiguous(),
+                                                 None, 0.0, scale, False, True, softmax_mode, None, "right")[:3]
+
+        o1, m1, l1 = part(0, head)
+        o2, m2, l2 = part(head, keys)
+        m1, l1, m2, l2 = m1.float(), l1.float(), m2.float(), l2.float()
+        mm = torch.maximum(m1, m2)
+        w1 = torch.exp(m1 - mm) / l1
+        w2 = torch.exp(m2 - mm) / l2
+        output = torch.addcmul(o1, o2 - o1, (w2 / (w1 + w2)).to(o1.dtype))
+        return output.transpose(1, 2)
     output = FusedSDPA.apply(
         query,
         key,
@@ -376,7 +404,7 @@ def _h3_vae_fused_sdpa(
         0.0,
         False,
         None,
-        "None",
+        softmax_mode,
         True,
     )
     # The qualified inference contract has finite Q/K/V and the fused softmax

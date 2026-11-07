@@ -87,6 +87,12 @@ def install_hpu_regional_compile() -> None:
 
     def load_model(self, *args, **kwargs):
         result = original_load_model(self, *args, **kwargs)
+        pipeline = getattr(self, "pipeline", None)
+        if pipeline is not None:
+            from vllm_gaudi.omni.attention import mark_max_free_layers
+            enabled = mark_max_free_layers(pipeline)
+            if enabled:
+                logger.info("HPU max-free softmax on %d DiT attention layers", enabled)
         if compile_enabled():
             pipeline = getattr(self, "pipeline", None)
             if pipeline is not None:

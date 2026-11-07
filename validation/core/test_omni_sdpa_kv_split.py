@@ -117,3 +117,50 @@ def test_boolean_mask_becomes_equivalent_additive_bias(monkeypatch):
     assert torch.allclose(out, ref, atol=1e-6)
     float_mask = torch.zeros(1, 1, 5, 9)
     assert attn.additive_mask(float_mask, torch.bfloat16) is float_mask
+
+
+@pytest.mark.parametrize("keys,chunk", [(300, 64), (256, 1000), (1000, 128)])
+def test_max_free_attention_matches_softmax(monkeypatch, keys, chunk):
+    """Row-max-free softmax with the Cauchy-Schwarz offset, zero-padded keys and the exact sum correction."""
+    attn = _load(monkeypatch)
+    torch.manual_seed(3)
+    D = 64
+    rms = lambda t: t / t.pow(2).mean(-1, keepdim=True).sqrt()  # noqa: E731  (H3 normalises q and k)
+    q = rms(torch.randn(1, 3, 200, D)) * 2
+    k = rms(torch.randn(1, 3, keys, D))
+    v = torch.randn(1, 3, keys, D)
+    out = attn.max_free_attention(q, k, v, D**-0.5, chunk=chunk)
+    ref = _reference(q, k, v, D**-0.5)
+    assert out.shape == q.shape
+    assert torch.allclose(out.double(), ref, atol=1e-5, rtol=1e-4)
+
+
+def test_mark_max_free_layers_skips_listed_blocks(monkeypatch):
+    attn = _load(monkeypatch)
+    monkeypatch.setattr(attn, "HPU_SDPA_MAX_FREE", True)
+    monkeypatch.setattr(attn, "HPU_SDPA_MAX_FREE_SKIP", frozenset({1, 3}))
+    nn = torch.nn
+
+    class Attention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attention = attn.HPUSDPAImpl(causal=False, softmax_scale=None)
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = Attention()
+
+    class DiT(nn.Module):
+        _repeated_blocks = ["Block"]
+
+        def __init__(self):
+            super().__init__()
+            self.blocks = nn.ModuleList(Block() for _ in range(5))
+
+    pipe = nn.Module()
+    pipe.transformer = DiT()
+    assert attn.mark_max_free_layers(pipe) == 3
+    assert [b.attn.attention._vllm_gaudi_max_free for b in pipe.transformer.blocks] == [True, False, True, False, True]
+    monkeypatch.setattr(attn, "HPU_SDPA_MAX_FREE", False)
+    assert attn.mark_max_free_layers(pipe) == 0
