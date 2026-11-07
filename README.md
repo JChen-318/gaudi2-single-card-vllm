@@ -2,13 +2,13 @@
 
 # Gaudi2 Single-Card vLLM
 
-**Qwen3.8-27B FP8 + DFlash2 FP16 on one Intel Gaudi2.**
+**Qwen3.8-27B FP8 + DFlash2 FP16 on one Intel Gaudi2, plus image and video generation through vLLM-Omni.**
 
 [![Hardware: Intel Gaudi2](https://img.shields.io/badge/Intel_Gaudi2-96_GiB_HBM-0071C5?style=flat-square)](#quick-start)
 [![Gaudi SDK: 1.24.1](https://img.shields.io/badge/Gaudi_SDK-1.24.1-4B5563?style=flat-square)](#requirements)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-3FB950?style=flat-square)](LICENSE)
 
-[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [API](#api) · [Documentation](#documentation) · [Limitations](#limitations)
+[Benchmarks](#benchmarks) · [Image & video](#image-and-video-generation-vllm-omni) · [Quick start](#quick-start) · [API](#api) · [Documentation](#documentation) · [Limitations](#limitations)
 
 </div>
 
@@ -68,6 +68,54 @@ The configured per-request context limit is **262,144 tokens**, including prompt
 
 </details>
 
+### Image and video generation (vLLM-Omni)
+
+The same card also serves two diffusion models through vLLM-Omni. They run on this repository's Gaudi plugin (`vllm-gaudi/vllm_gaudi/omni`), one model at a time, never alongside the 27B service. Measured on **2026-11-07**. Steady-state figures are second or later requests; the first request after startup also compiles.
+
+| Model | Task | Before | Now | Change |
+|:---|:---|---:|---:|---:|
+| **MiniMax H3** (FL2VA, LightX2V 4-step Turbo LoRA, online FP8) | 5 s text-to-video + audio, 1344×768, 124 frames | 191.5 s | **100.6 s** | **−47%** |
+| **Qwen-Image 2.1** (BF16) | Text-to-image 1024², HTTP request | 6.5–7.5 s | **4.4 s** | ≈ −35% |
+
+<details>
+<summary><strong>Where the time goes and what changed</strong></summary>
+
+**MiniMax H3**, one 5-second video:
+
+| Stage | Before | Now |
+|:---|---:|---:|
+| DiT forward ×4 | 42.36 s each | **20.09 s each** |
+| Video VAE decode | 14.4 s | 11.3 s |
+| Text encoding | 3.8 s | 3.9 s |
+| **Request** | **191.5 s** | **100.6 s** (first request 166 s) |
+
+Each step below was added cumulatively and measured on the same 5-second request:
+
+| Change | Request |
+|:---|---:|
+| Original | 191.5 s |
+| Unaligned keys split into a 128-aligned head and a short tail, merged exactly | 158.4 s |
+| `PT_HPU_SDPA_HEAD_FACTOR=2` (bit-identical output) | 154.3 s |
+| Fast softmax | ≈ 131 s |
+| Regional `torch.compile` of the DiT blocks (HPU backend) | 116 s |
+| Row-max-free softmax: q/k are RMS-normalised, so the Cauchy–Schwarz bound replaces the row max; one compiled graph per 2,560-query chunk | 103.2 s |
+| VAE attention with fast softmax and aligned keys | **100.6 s** |
+
+Attention is now about 315 ms per layer against a floor of about 262 ms for its two matrix products on the MME. The query–key product has head dimension 128, so the MME reaches only about 28% of peak on it. Block-sparse attention, K/V pooling, FP8 attention products, polynomial and bit-trick exponentials, and other tilings were measured and rejected. Details: [optimization log §23](docs/OPTIMIZATION.md#23-vllm-omni-媒体模型minimax-h3-的-dit-注意力).
+
+**Qwen-Image 2.1**: 3.59 s server-side at 1024² (3 DiT steps of about 0.32 s each once warm), 17.0 s at 1536², 41.6 s at 2048², about 7.0 s for an image edit. The changes are:
+- Text tokens padded to 64-token buckets, so compiled graphs are reused across prompts; padded rows are skipped on the RoPE frame axis.
+- Boolean attention masks sent as additive 0/−inf bias, which avoids a slow FusedSDPA path.
+- Regional compile of the DiT blocks.
+- Automatic VAE tiling only above 1536² pixels.
+- Warm-up requests at startup.
+
+Online FP8 was 11% faster at 1024² but changed image composition (17–26 dB PSNR against BF16) and is not enabled. Details: [optimization log §24](docs/OPTIMIZATION.md#24-vllm-omni-媒体模型qwen-image-21).
+
+</details>
+
+The Omni switches are environment variables and default to off: `VLLM_GAUDI_OMNI_HPU_COMPILE`, `VLLM_GAUDI_OMNI_SDPA_SOFTMAX_MODE`, `VLLM_GAUDI_OMNI_SDPA_KV_ALIGN`, `VLLM_GAUDI_OMNI_SDPA_MAXFREE` (+ `_SKIP_LAYERS`), `VLLM_GAUDI_H3_VAE_SOFTMAX_MODE` and `VLLM_GAUDI_H3_VAE_KV_ALIGN`. The one exception is `VLLM_GAUDI_OMNI_SDPA_KV_ALIGN`, which is on by default (128). The H3 deployment uses `SOFTMAX_MODE=fast`, `PT_HPU_SDPA_HEAD_FACTOR=2`, `HPU_COMPILE=1`, `MAXFREE=1` with layers `45,48,49` skipped, and the VAE in fast mode with alignment 128. The model launchers and the Qwen-Image worker are not part of this repository.
+
 ## What is optimized
 
 - **Stochastic speculative decoding.** A separate DFlash2 FP16 draft model proposes candidates for the Qwen3.8-27B FP8 target, retaining temperature, top-p, and top-k sampling. Target-side MTP layers are optional. Gains depend on draft acceptance and workload content.
@@ -76,6 +124,7 @@ The configured per-request context limit is **262,144 tokens**, including prompt
 - **Host/device overlap.** Lookahead submission, device-side draft preparation, vectorized indices, and compiled regions reduce host preparation and submission gaps.
 - **Native kernels and FP8.** Fused GDN recurrence, specialized rejection sampling, faster candidate selection, FP8 vocabulary projection, and FP8 KV storage target device time and memory use.
 - **Image input and recipe caching.** Fixed vision buckets compile during warm-up. A TPC kernel-library shim enables device recipe caching across the native libraries.
+- **Diffusion models (vLLM-Omni).** DiT attention with aligned key splitting and a row-max-free softmax, regional compilation of the transformer blocks, additive masks, and a faster video VAE attention. MiniMax H3 video takes 100.6 s instead of 191.5 s; Qwen-Image 2.1 takes 4.4 s per 1024² image.
 
 Implementation details and before/after measurements are in the [optimization log](docs/OPTIMIZATION.md).
 
@@ -239,6 +288,7 @@ docs/                     Guides, benchmark data, and source provenance
 - **Prefix-cache boundaries.** GDN snapshots are saved every 16,384 tokens and at the last 2,048-token boundary before each prompt ends; at most 16 snapshots are retained. Changed conversation history can reduce reuse.
 - **Quality evaluation.** FP8 KV storage is uncalibrated and lacks a systematic quality evaluation. The historical FP8 vocabulary-projection check reports 98.4% top-1 agreement with BF16.
 - **Workload dependence.** Draft acceptance varies with content; prose can gain less than code or repetitive structured text. A successful benchmark request establishes execution, not answer quality or constrained-output correctness.
+- **Diffusion models.** H3 and Qwen-Image figures come from one card and fixed seeds, with quality checked by PSNR and visual comparison, not a systematic evaluation. Fast softmax changes video detail compared with the original path; composition and motion are preserved. Only one model holds the card at a time.
 - **Acceptance coverage.** Tool calling, cancellation/preemption, and contexts above 100K tokens need broader validation. The supplied 131,072-token measurements and earlier ~180K runs do not establish full 262,144-token coverage.
 
 ## Provenance and license
