@@ -768,10 +768,34 @@ CPU 测试 `validation/core/test_omni_sdpa_kv_split.py`（6 项）：拆分结�
 
 原版同种子重跑逐比特相同；拆分对齐后视频构图、镜头运动一致，细节不同（PSNR 约 18 dB，扩散过程把注意力的微小数值差异放大），注意力本身相对 FP32 的误差不变（1.548% 对 1.539%）。
 
-### 23.4 没有做或不采用的
+### 23.4 区域编译与掩码
+
+| 项 | 位置 | 内容 |
+|---|---|---|
+| HPU 区域编译 | `vllm_gaudi/omni/regional_compile.py`，`VLLM_GAUDI_OMNI_HPU_COMPILE=1`（默认关，H3 部署脚本打开） | Omni 平台不支持 inductor，DiT block 原来一直 eager。`DiffusionModelRunner.load_model` 之后把各模型 `_repeated_blocks` 里的 block 用 `torch.compile(backend="hpu_backend", dynamic=False)` 编译（已被卸载钩子接管的原始 forward 一并处理）。每个新形状第一次请求时编译一次。`dynamic=True` 在 HPU 上切片越界报错，不可用 |
+| 布尔掩码转加法偏置 | `vllm_gaudi/omni/attention.py` `additive_mask` | FusedSDPA 对布尔掩码在部分长度下走慢路径：32 头 × 128，4032 个 query × 4096 个 key 时 70 ms，同样的 0/-inf 偏置 3.9 ms（4032×4086：80 ms 对 4.4 ms）。HPU_SDPA 后端把布尔掩码统一转成偏置 |
+
+H3（5 秒 1344×768，正式启动脚本，稳态第二次请求）：拆分对齐 + `HEAD_FACTOR=2` + fast softmax + 区域编译，DiT 每次前向 23.3 s，单次请求 116–118 s（原版 191.5 s，-39%）；首次请求 178 s（含初始化与编译）。
+
+### 23.5 注意力还剩多少（H3 一层，37,632 行，真实 q/k/v）
+
+| 项 | 耗时 |
+|---|---:|
+| FusedSDPA None / fast | 519 / 390 ms |
+| Q·Kᵀ（BF16）/ P·V（BF16） | 165 / 97 ms |
+| 只做 exp（TPC，8×10¹⁰ 个元素） | 220 ms |
+| query 分块 + 编译图（Q·Kᵀ→exp→P·V） | 380 ms，误差 0.66%（fast 0.9%） |
+| 同上，P·V 用 FP8 | 449–546 ms（P 转 FP8 多一遍 TPC） |
+| Q·Kᵀ 用 FP8 | 278 ms（内维 128 时更慢） |
+
+瓶颈是 TPC 上的 exp（约 3.6×10¹¹ 个/秒），MME 的两次乘法合计 262 ms，完全重叠的下限约 260 ms，现在 390 ms。MME 不能算 exp/max，FP8 只会给 TPC 增加工作。K/V 相邻 2/4 个取平均误差 27%/42%；按块均值选 top-k 的块稀疏在保留 50% 时中深层误差 11–23%，用精确质量挑块（oracle）覆盖 95% 质量也要 67–86% 的块（最后一层 39%）：H3 的注意力细粒度且分散，稀疏和低秩近似都不适用。
+
+### 23.6 没有做或不采用的
 
 | 方向 | 原因 |
 |---|---|
 | `PT_HPU_SDPA_BR/BC_FACTOR`、`QKV_SLICE_MODE_FWD`、`Q_SLICE_MODE`、`RESHAPED_SOFTMAX_MODE` | eager 下实测无影响 |
 | 补齐 Q 或用掩码屏蔽补齐的 key | 不提速（见 23.1） |
 | Cache-DiT / TeaCache | 4 步 Turbo，可缓存的步数太少 |
+| 块稀疏注意力、K/V 降采样 | 见 23.5 |
+| VDN-H3（窗口 softmax + Video DeltaNet，8 步） | 5 秒视频窗口覆盖约一半帧，8 步反而比 4 步 Turbo 慢；只对 10 秒以上的视频有利 |

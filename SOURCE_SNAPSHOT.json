@@ -10343,12 +10343,12 @@
       "bytes": 4399
     },
     "vllm-gaudi/vllm_gaudi/omni/__init__.py": {
-      "sha256": "d04e17fcdda4db15b0232daabe01965698952be74b10f5eefc5a579709b9b504",
-      "bytes": 1127
+      "sha256": "ea4ee6322151df0a5ce30af19022e6b042f00ceab330a0c279cd4e07e012c922",
+      "bytes": 1240
     },
     "vllm-gaudi/vllm_gaudi/omni/attention.py": {
-      "sha256": "de3e7033dc0609e4bd713da65805e958cc700f406f58264fa38dc74338a47199",
-      "bytes": 7988
+      "sha256": "6cac35eefcd2af5e46948e5312a5af420089a978d2f42dedf8b6d1b449147dd4",
+      "bytes": 8602
     },
     "vllm-gaudi/vllm_gaudi/omni/compat.py": {
       "sha256": "d84da5133c6ac5259d644976accd8491aed4876bb2073746491e3e532b1470ec",
@@ -10373,6 +10373,10 @@
     "vllm-gaudi/vllm_gaudi/omni/profiler.py": {
       "sha256": "9e8aa69e2d1854ce3222b635bab92220cf7aa52af451d3c502f5968e98861d83",
       "bytes": 1469
+    },
+    "vllm-gaudi/vllm_gaudi/omni/regional_compile.py": {
+      "sha256": "c5499dd5a5d33a61ed49d4aa28d52cc1c99c526e9b25d09da845a9a4d04b85d0",
+      "bytes": 4611
     },
     "vllm-gaudi/vllm_gaudi/ops/__init__.py": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

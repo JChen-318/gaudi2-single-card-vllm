@@ -25,9 +25,11 @@ def register_omni() -> None:
 
     from vllm_gaudi.omni.compat import install_vllm_omni_compat
     from vllm_gaudi.omni.minimax_h3 import install_minimax_h3_patches
+    from vllm_gaudi.omni.regional_compile import install_hpu_regional_compile
 
     install_vllm_omni_compat()
     install_minimax_h3_patches()
+    install_hpu_regional_compile()
 
 
 __all__ = ["register_omni", "register_omni_platform"]

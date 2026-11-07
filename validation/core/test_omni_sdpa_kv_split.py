@@ -100,3 +100,20 @@ def test_merge_in_bf16_stays_close(monkeypatch):
     rel = ((out.double() - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt()).item()
     assert out.dtype == torch.bfloat16
     assert rel < 1e-2
+
+
+def test_boolean_mask_becomes_equivalent_additive_bias(monkeypatch):
+    """A boolean key mask is passed to FusedSDPA as a 0/-inf bias (the boolean form is slow for some lengths)."""
+    attn = _load(monkeypatch)
+    torch.manual_seed(2)
+    mask = torch.rand(1, 1, 5, 9) > 0.3
+    mask[..., 0] = True  # every row keeps a key
+    bias = attn.additive_mask(mask, torch.bfloat16)
+    assert bias.dtype == torch.bfloat16 and bias.shape == mask.shape
+    assert torch.equal(bias == 0, mask) and torch.isinf(bias[~mask]).all()
+    q, k, v = torch.randn(1, 2, 5, 8), torch.randn(1, 2, 9, 8), torch.randn(1, 2, 9, 8)
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+    out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=bias.float())
+    assert torch.allclose(out, ref, atol=1e-6)
+    float_mask = torch.zeros(1, 1, 5, 9)
+    assert attn.additive_mask(float_mask, torch.bfloat16) is float_mask

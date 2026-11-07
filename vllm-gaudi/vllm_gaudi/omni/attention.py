@@ -45,6 +45,15 @@ def merge_kv_split(o1: torch.Tensor, m1: torch.Tensor, l1: torch.Tensor, o2: tor
     return torch.addcmul(o1, o2 - o1, share)
 
 
+def additive_mask(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Boolean "may attend" mask -> additive bias (0 / -inf) in the query dtype. FusedSDPA takes a boolean mask on a
+    much slower path for some lengths (Qwen-Image 2.1 decode, 4032 queries x 4096 keys: 70 ms instead of 4 ms per
+    call); the equivalent bias is always on the fast path."""
+    if mask.dtype != torch.bool:
+        return mask
+    return torch.zeros(mask.shape, dtype=dtype, device=mask.device).masked_fill(~mask, float("-inf"))
+
+
 def _sdpa_with_stats(query, key, value, scale):
     # Inputs must be contiguous: with a sliced view of a longer key tensor FusedSDPA returns wrong results for some
     # lengths (13% error measured at 36,864 of 37,750 keys).
@@ -127,6 +136,7 @@ class HPUSDPAImpl(SDPAImpl):
                 attention_mask = attention_mask[:, None, None, :kv_length]
             else:
                 attention_mask = attention_mask[..., :q_length, :kv_length]
+            attention_mask = additive_mask(attention_mask, query.dtype)
 
         from habana_frameworks.torch.hpex.kernels import FusedSDPA
 
@@ -171,5 +181,5 @@ class HPUSDPAImpl(SDPAImpl):
         return merge_kv_split(o1, m1, l1, o2, m2, l2).permute(0, 2, 1, 3)
 
 
-__all__ = ["HPU_SDPA_KV_ALIGN", "HPU_SDPA_SOFTMAX_MODE", "HPUSDPABackend", "HPUSDPAImpl", "kv_split_point",
-           "merge_kv_split"]
+__all__ = ["HPU_SDPA_KV_ALIGN", "HPU_SDPA_SOFTMAX_MODE", "HPUSDPABackend", "HPUSDPAImpl", "additive_mask",
+           "kv_split_point", "merge_kv_split"]
