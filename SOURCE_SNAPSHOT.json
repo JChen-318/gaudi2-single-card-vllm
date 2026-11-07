@@ -11179,8 +11179,8 @@
       "bytes": 39467
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_model_runner.py": {
-      "sha256": "015b2b1923c1dc5280f8c91ebf13c6dbc8da3484b3ba5214a707890e9b938639",
-      "bytes": 619551
+      "sha256": "0c65de7d933814a62b14479f54aa3da4126f8622dc570a43bf542d4fc2352847",
+      "bytes": 620194
     },
     "vllm-gaudi/vllm_gaudi/v1/worker/hpu_worker.py": {
       "sha256": "6b4de1df5298233cd4e0d5c61d63fb3775da08a0e55a709ca13003767d60b28b",

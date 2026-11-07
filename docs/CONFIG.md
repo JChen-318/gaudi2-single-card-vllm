@@ -118,11 +118,11 @@ WorkingDirectory=/path/to/gaudi2-single-card-vllm
 ExecStart=/path/to/gaudi2-single-card-vllm/scripts/serve.sh
 KillSignal=SIGTERM
 TimeoutStopSec=120
-Restart=on-failure
+Restart=always
 RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-`serve.sh` 不加 `--daemon` 时在前台运行，适合交给 systemd 管理。`journalctl -u gaudi2-vllm -f` 查看日志。
+`serve.sh` 不加 `--daemon` 时在前台运行，适合交给 systemd 管理。用 `Restart=always`：引擎崩溃后 API 进程是正常退出（状态 0），`on-failure` 不会重启它；`systemctl stop` 停下的服务不受影响。`journalctl -u gaudi2-vllm -f` 查看日志。

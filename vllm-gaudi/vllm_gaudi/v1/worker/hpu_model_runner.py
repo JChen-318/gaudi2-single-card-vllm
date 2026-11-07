@@ -3385,12 +3385,18 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         mm_kwargs = list[tuple[str, MultiModalKwargsItem]]()
         # List of tuple (mm_hash, pos_info)
         mm_hashes_pos = list[tuple[str, PlaceholderRange]]()
+        # Encode only the items the scheduler scheduled for this step, as the GPU runner does. Earlier items of a
+        # request whose tokens are already computed (for example images of previous turns covered by a prefix-cache
+        # hit) are not scheduled, their cache entries may have been freed, and their features can arrive without
+        # pixel data; encoding them returned None from embed_multimodal and killed the engine (issue #2).
+        scheduled_encoder_inputs = scheduler_output.scheduled_encoder_inputs or {}
         for req_id in req_ids:
             req_state = self.requests[req_id]
 
-            for mm_feature in req_state.mm_features:
+            for mm_input_id in scheduled_encoder_inputs.get(req_id, ()):
+                mm_feature = req_state.mm_features[mm_input_id]
                 mm_hash = mm_feature.identifier
-                if mm_hash in self.encoder_cache:
+                if mm_hash in self.encoder_cache or mm_feature.data is None:
                     continue
                 mm_kwargs.append((mm_feature.modality, mm_feature.data))
                 mm_hashes_pos.append((mm_hash, mm_feature.mm_position))
