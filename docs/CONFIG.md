@@ -14,6 +14,7 @@
 | `PREFILL_CHUNK` | 2048 | prefill 每步处理的 token 数（第 22 节）。4096 让 32K 以上的提示词快 4–6%，但多占约 8 GB 显存，按默认的显存安排（两个 256K KV、KV 镜像、262K 的上下文分桶）预热最大分桶时显存不足，要先在别处腾出显存 |
 | `PREFILL_SPLIT_MIN_PAGES`、`PREFILL_SPLIT_DIAG_CAUSAL` | 128、1 | 上下文达到这么多页（每页 128 token）后，prefill 注意力按 8K 切片批量计算；分块自身那一块用内核的因果模式，不再加偏置（第 22 节） |
 | `GDN_FUSED_RMSNORM`、`GDN_PREFILL_H25` | 1、0 | GDN 输出用融合的门控 RMSNorm（更快，输出数值会变，0 = 原来的精确算法）；H25 分块递推在这个模型上实测没有收益，默认关（第 22 节） |
+| `GDN_PREFILL_BF16`、`GDN_TPC` | 1、0 | GDN prefill 分块里的矩阵乘用 BF16（求解和状态仍是 FP32），prefill 快 3–6%，0 = 全 FP32；`GDN_TPC=1` 用 `csrc/qwen4exp` 的 GDN TPC 内核（要先编译），实测没有收益（第 22 节） |
 | `PREFIX_CACHE` | 1 | 前缀缓存：请求开头与之前某个请求相同的部分直接复用（第 18 节）。0 = 关闭 |
 | `PREFIX_STATE_SLOTS` | 16 | GDN 状态快照个数，每个约 155 MB 显存，按最近使用淘汰 |
 | `PREFIX_STATE_INTERVAL` | 16384 | 除每个提示词末尾前的最后一个 2048 边界外，每隔多少 token 存一份快照（2048 的倍数） |

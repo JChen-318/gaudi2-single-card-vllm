@@ -666,7 +666,7 @@ GDN 层每层约 5.3 ms，46 层约 243 ms，与上下文无关。16 万 token �
 
 `tok/round` 约 2.8，草稿接受率不受硬件上限约束，是 decode 还有较大空间的方向，但取决于草稿模型。
 
-## 22. v19：prefill 的分块、分片注意力与融合 RMSNorm
+## 22. v19：prefill 的分块、分片注意力、融合 RMSNorm 与 GDN BF16
 
 ### 22.1 trace 指出的位置
 
@@ -687,7 +687,9 @@ GDN 层每层约 5.3 ms，46 层约 243 ms，与上下文无关。16 万 token �
 | `PREFILL_SPLIT_MIN_PAGES` | 128 | `VLLM_HPU_PROMPT_FINE_CTX_MIN`：分片注意力从 16K 上下文开始（原来 32K） |
 | `PREFILL_SPLIT_DIAG_CAUSAL` | 1 | 分片注意力的对角块（段对自身）用 FusedSDPA 的因果模式，不再生成并相加 `[段, 段]` 偏置 |
 | `GDN_FUSED_RMSNORM` | 1 | `VLLM_GDN_FUSED_RMSNORM_GATED`：GDN 输出用融合的门控 RMSNorm。第 21 节因为会改变输出而没开 |
-| `GDN_PREFILL_H25` | 0 | PR #1 的 H25/H26（GDN 分块用 FlashQLA 形式、1024 token 以上 BF16 矩阵乘）。在这个模型上实测没有提速，保持关闭 |
+| `GDN_PREFILL_H25` | 0 | PR #1 的 H25/H26（GDN 分块用 FlashQLA 形式、1024 token 以上 BF16 矩阵乘）。这个模型的 prefill 走 FlashInfer 的 GDN 战术（`gaudi2_qwen38_gdn.json`，本来就是 FlashQLA 重写 + 递归求解），不经过 H25 改的分块路径，所以开不开都一样 |
+| `GDN_PREFILL_BF16` | 1 | `VLLM_HPU_GDN_PREFILL_COMPUTE_DTYPE=bfloat16`：把 H25 的 BF16 矩阵乘做进 FlashInfer 战术，分块内的矩阵乘用 BF16，三角求解和跨块状态仍是 FP32（`ops/flashinfer_gaudi_adapter.py`）。0 = 原来的全 FP32 |
+| `GDN_TPC` | 0 | PR #1 的 GDN TPC 内核（`csrc/qwen4exp`：prefill 因果卷积、decode 门控 RMSNorm），库加进转接库列表和 recipe 缓存哈希。实测没有收益，保持关闭；没编译库时忽略 |
 
 ### 22.3 卡上单层注意力（24 个 Q 头、4 个 KV 头、head_dim 256，`tools` 外的一次性脚本）
 
@@ -709,12 +711,17 @@ GDN 层每层约 5.3 ms，46 层约 243 ms，与上下文无关。16 万 token �
 | B：全开（含 H25） | 5601 | 5569 | 5248 | 5207 | 4606 | 3620 |
 | C：B 但段 2048（= 现在的默认，H25 除外） | 5609 | 5502 | 5308 | 4956 | 4332 | 3496 |
 | D：B 但不开 H25 | 5581 | 5553 | 5236 | 5207 | 4609 | 3610 |
+| E：C 但不开 H25 | 5568 | 5502 | 5282 | 4952 | 4318 | 3487 |
+| F：E + GDN_PREFILL_BF16（= 现在的默认） | 5886 | 5733 | 5579 | 5181 | 4496 | 3605 |
+| G：E + GDN_TPC | 5572 | 5463 | 5295 | 4946 | 4332 | 3490 |
+| H：F + GDN_TPC | 5877 | 5748 | 5579 | 5193 | 4509 | 3606 |
 
-- 相对 A：+6%（8K）到 +20%（32K），128K +10%。
+- 现在的默认（F）相对 A：+12%（8K、16K）、+19%（24K、32K）、+13%（64K）、+9%（128K）。
+- GDN BF16（F 对 E）：+3.4% 到 +5.7%。GDN TPC（G 对 E、H 对 F）：prefill 在 ±0.8% 内，decode 25.5 → 26.3–26.4 ms/轮，变慢，不开。
 - 段 4096 的贡献（B 对 C）：24K 以内没有，32K 起 4–6%。
 - H25（B 对 D）：在 ±0.5% 内，没有贡献。
-- decode 在四个配置都是 25.4–25.6 ms/轮。大海捞针（32K、100K 各两个深度）都是 4/4，前缀缓存命中 0.48–0.50 s 且输出与首次相同，图片输入 12/12。
-- 7 个固定提示词的贪心输出有 3 个与 A 逐字相同，其余在 55–167 字符后分叉，答案都正确。分叉来自融合 RMSNorm（decode 也用它），`GDN_FUSED_RMSNORM=0` 恢复原来的精确算法。
+- decode 在 A–F 都是 25.4–25.7 ms/轮。大海捞针（32K、100K 各两个深度）都是 4/4，前缀缓存命中 0.48–0.50 s 且输出与首次相同，图片输入 12/12。
+- 7 个固定提示词的贪心输出有 3 个（F 是 2 个）与 A 逐字相同，其余在 55–167 字符后分叉，答案都正确（F 多分叉的一个是 64 token 截断的推理过程，两版步骤都对、只是措辞不同）。分叉来自融合 RMSNorm（decode 也用它），`GDN_FUSED_RMSNORM=0` 恢复原来的精确算法。
 - 显存：跳过预热的测法下，段 4096 比 2048 峰值多约 8 GB（84.6 → 92.8 GB）。
 
 ### 22.6 段 4096 上线失败
