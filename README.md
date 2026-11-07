@@ -26,24 +26,24 @@ This is a community engineering snapshot, independent of Intel and the official 
 
 ### Six workloads, nine prompt lengths
 
-The supplied report covers **6 workloads × 9 prompt lengths**, from **512 to 131,072 tokens**, through an OpenAI-compatible endpoint serving `qwen3.8-27b-fp8-mtp`. All **54 measurements** show **1/1 requests successful** at concurrency **1**.
+Measured on **2026-11-07** against the v19 deployment (commit `8f3d92e`: 2048-token prefill chunks, sliced prefill attention from 16K, fused GDN RMSNorm, BF16 GDN prefill) with the user's LLM speed-test harness: **6 workloads × 9 prompt lengths**, from **512 to 131,072 tokens**, through the OpenAI-compatible endpoint serving `qwen3.8-27b-fp8-mtp`. All **54 measurements** show **1/1 requests successful** at concurrency **1**.
 
 <p align="center">
-  <img src="docs/assets/workload-throughput.svg" width="100%" alt="Reported workload averages: steady decode ranges from 112.96 tokens/s for Math and Logic to 145.61 tokens/s for Technical Doc QA; end-to-end throughput ranges from 43.52 to 53.02 tokens/s.">
+  <img src="docs/assets/workload-throughput.svg" width="100%" alt="Workload averages: steady decode ranges from 114.05 tokens/s for Prose and QA to 136.42 tokens/s for Technical Doc QA; end-to-end throughput ranges from 51.50 to 57.28 tokens/s.">
 </p>
 
 | Workload | Steady decode (tokens/s) | vs. General | End-to-end (tokens/s) | Reported TTFT* (ms) |
 |:---|---:|---:|---:|---:|
-| General / Essay | 121.78 | Baseline | 51.98 | 8,339.7 |
-| Code Decode | 129.98 | +6.7% | 47.55 | 8,327.2 |
-| Structured JSON | 121.39 | −0.3% | 48.45 | 8,332.9 |
-| Prose & QA | 123.99 | +1.8% | 49.94 | 9,583.5 |
-| **Technical Doc QA** | **145.61** | **+19.6%** | **53.02** | 9,370.4 |
-| Math & Logic | 112.96 | −7.2% | 43.52 | 8,372.4 |
+| General / Essay | 116.50 | Baseline | 56.51 | 7,058.4 |
+| Code Decode | 131.45 | +12.8% | 57.28 | 7,113.0 |
+| Structured JSON | 124.79 | +7.1% | 55.56 | 7,122.8 |
+| Prose & QA | 114.05 | −2.1% | 51.50 | 8,196.0 |
+| **Technical Doc QA** | **136.42** | **+17.1%** | 55.48 | 7,973.6 |
+| Math & Logic | 125.21 | +7.5% | **57.01** | 7,155.5 |
 
-Technical Doc QA has the highest reported workload-average decode throughput, **1.29×** the lowest workload average. Peak per-row prefill is **4,674.88 tokens/s**, at a 16,384-token prompt in Prose & QA.
+Prefill peaks at **5,814.88 tokens/s** (8,192-token prompt, Technical Doc QA) and is **4,944–5,815 tokens/s** from 4K to 32K prompt tokens in every workload; at 131,072 tokens it is **3,437–3,598 tokens/s** (TTFT 36.4–42.5 s). Compared with the [previous report](docs/benchmarks/previous/source-report.png), the mean TTFT across the nine lengths drops by **14.5–15.4%** in every workload and the 131K prefill rises from 3,015–3,159 to 3,437–3,598 tokens/s, while the mean inter-token latency stays at about 27–29 ms.
 
-*Source: the [supplied screenshot](docs/benchmarks/source-report.png), transcribed without rerunning the model. The summary labels TTFT as “P50,” but its aggregation method is unavailable. The figures are close to the means across the nine prompt-length rows; treat them as reported aggregates, not verified request-level percentiles. The screenshot does not establish sampling settings, output lengths, draft-model identity, or software revision. “Structured JSON” is the report's workload label; it does not establish constrained-decoding support.*
+*Source: the [report screenshot](docs/benchmarks/source-report.png), transcribed. The summary labels TTFT as “P50,” but each figure is within about 3 ms of the mean of its nine prompt-length rows; treat them as reported aggregates, not verified request-level percentiles. Decode rates vary from row to row with the draft acceptance of each prompt. “Structured JSON” is the report's workload label; it does not establish constrained-decoding support.*
 
 → **[Full results, context-length curves, and metric notes](docs/BENCHMARKS.md)** · [54-row data](docs/benchmarks/workload-details.csv) · [Summary data](docs/benchmarks/workload-summary.csv)
 
@@ -194,7 +194,7 @@ scripts/bench.sh          # Single-stream, two-stream, and ~30K-context checks
 scripts/bench.sh --full   # Also run the 15-category prompt suite
 ```
 
-These scripts are the repository's own checks; they do not reproduce the supplied screenshot's external six-workload protocol. See [CPU-side validation](validation/README.md) and [benchmark/trace tools](tools/README.md) for more diagnostics.
+These scripts are the repository's own checks; they do not reproduce the external six-workload speed-test protocol. See [CPU-side validation](validation/README.md) and [benchmark/trace tools](tools/README.md) for more diagnostics.
 
 ## Documentation
 
@@ -234,7 +234,7 @@ docs/                     Guides, benchmark data, and source provenance
 ## Limitations
 
 - **Scope.** Tuned for one Gaudi2 and one or two concurrent requests. Higher concurrency and other model/draft combinations need independent validation.
-- **Long-context latency.** Uncached prompts can take tens of seconds to reach the first token. In the supplied report, TTFT at 131,072 tokens ranges from **41.51 to 48.37 seconds**. Long prefill can also slow another request's decode to a few tokens/s.
+- **Long-context latency.** Uncached prompts can take tens of seconds to reach the first token. In the v19 report, TTFT at 131,072 tokens ranges from **36.4 to 42.5 seconds**. Long prefill can also slow another request's decode to a few tokens/s.
 - **Occasional recompilation.** Simultaneous short requests can trigger 90–100-second Dynamo recompilations. Startup priming and recompilation logs help diagnose this unresolved issue.
 - **Prefix-cache boundaries.** GDN snapshots are saved every 16,384 tokens and at the last 2,048-token boundary before each prompt ends; at most 16 snapshots are retained. Changed conversation history can reduce reuse.
 - **Quality evaluation.** FP8 KV storage is uncalibrated and lacks a systematic quality evaluation. The historical FP8 vocabulary-projection check reports 98.4% top-1 agreement with BF16.

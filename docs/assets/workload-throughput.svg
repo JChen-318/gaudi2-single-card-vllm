@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
   <title id="title">Six-workload throughput comparison</title>
-  <desc id="desc">Reported workload-average steady decode and end-to-end throughput at concurrency one. Technical Doc QA leads at 145.61 tokens per second steady decode. Full data is in docs/BENCHMARKS.md.</desc>
+  <desc id="desc">Reported workload-average steady decode and end-to-end throughput at concurrency one. Technical Doc QA leads at 136.42 tokens per second steady decode. Full data is in docs/BENCHMARKS.md.</desc>
   <rect width="1200" height="700" rx="16" fill="#0d1117"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
     <text x="56.0" y="54.0" font-size="38" fill="#f0f6fc" font-weight="650" text-anchor="start">Six workloads. One Gaudi2.</text>
@@ -21,42 +21,42 @@
     <line x1="1004.0" y1="166.0" x2="1004.0" y2="622.0" stroke="#303b4a" stroke-width="1" />
     <text x="1004.0" y="157.0" font-size="20" fill="#a5b4c5" font-weight="400" text-anchor="middle">160</text>
     <text x="56.0" y="207.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">General / Essay</text>
-    <rect x="344" y="185" width="502.34" height="25" rx="3" fill="#58a6ff"/>
-    <text x="858.3" y="208.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">121.78</text>
-    <rect x="344" y="218" width="214.42" height="12" rx="3" fill="#64748b"/>
-    <text x="570.4" y="232.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">51.98</text>
+    <rect x="344" y="185" width="480.56" height="25" rx="3" fill="#58a6ff"/>
+    <text x="836.6" y="208.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">116.50</text>
+    <rect x="344" y="218" width="233.10" height="12" rx="3" fill="#64748b"/>
+    <text x="589.1" y="232.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">56.51</text>
     <text x="1144.0" y="207.0" font-size="23" fill="#a5b4c5" font-weight="400" text-anchor="end">Baseline</text>
     <text x="56.0" y="285.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">Code Decode</text>
-    <rect x="344" y="263" width="536.17" height="25" rx="3" fill="#58a6ff"/>
-    <text x="892.2" y="286.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">129.98</text>
-    <rect x="344" y="296" width="196.14" height="12" rx="3" fill="#64748b"/>
-    <text x="552.1" y="310.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">47.55</text>
-    <text x="1144.0" y="285.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+6.7%</text>
+    <rect x="344" y="263" width="542.23" height="25" rx="3" fill="#58a6ff"/>
+    <text x="898.2" y="286.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">131.45</text>
+    <rect x="344" y="296" width="236.28" height="12" rx="3" fill="#64748b"/>
+    <text x="592.3" y="310.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">57.28</text>
+    <text x="1144.0" y="285.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+12.8%</text>
     <text x="56.0" y="363.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">Structured JSON</text>
-    <rect x="344" y="341" width="500.73" height="25" rx="3" fill="#58a6ff"/>
-    <text x="856.7" y="364.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">121.39</text>
-    <rect x="344" y="374" width="199.86" height="12" rx="3" fill="#64748b"/>
-    <text x="555.9" y="388.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">48.45</text>
-    <text x="1144.0" y="363.0" font-size="23" fill="#a5b4c5" font-weight="400" text-anchor="end">-0.3%</text>
+    <rect x="344" y="341" width="514.76" height="25" rx="3" fill="#58a6ff"/>
+    <text x="870.8" y="364.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">124.79</text>
+    <rect x="344" y="374" width="229.19" height="12" rx="3" fill="#64748b"/>
+    <text x="585.2" y="388.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">55.56</text>
+    <text x="1144.0" y="363.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+7.1%</text>
     <text x="56.0" y="441.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">Prose &amp; QA</text>
-    <rect x="344" y="419" width="511.46" height="25" rx="3" fill="#58a6ff"/>
-    <text x="867.5" y="442.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">123.99</text>
-    <rect x="344" y="452" width="206.00" height="12" rx="3" fill="#64748b"/>
-    <text x="562.0" y="466.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">49.94</text>
-    <text x="1144.0" y="441.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+1.8%</text>
+    <rect x="344" y="419" width="470.46" height="25" rx="3" fill="#58a6ff"/>
+    <text x="826.5" y="442.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">114.05</text>
+    <rect x="344" y="452" width="212.44" height="12" rx="3" fill="#64748b"/>
+    <text x="568.4" y="466.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">51.50</text>
+    <text x="1144.0" y="441.0" font-size="23" fill="#a5b4c5" font-weight="400" text-anchor="end">-2.1%</text>
     <text x="56.0" y="519.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">Technical Doc QA</text>
-    <rect x="344" y="497" width="600.64" height="25" rx="3" fill="#3fb950"/>
-    <text x="956.6" y="520.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">145.61</text>
-    <rect x="344" y="530" width="218.71" height="12" rx="3" fill="#64748b"/>
-    <text x="574.7" y="544.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">53.02</text>
-    <text x="1144.0" y="519.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+19.6%</text>
+    <rect x="344" y="497" width="562.73" height="25" rx="3" fill="#3fb950"/>
+    <text x="918.7" y="520.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">136.42</text>
+    <rect x="344" y="530" width="228.85" height="12" rx="3" fill="#64748b"/>
+    <text x="584.9" y="544.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">55.48</text>
+    <text x="1144.0" y="519.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+17.1%</text>
     <text x="56.0" y="597.0" font-size="25" fill="#f0f6fc" font-weight="600" text-anchor="start">Math &amp; Logic</text>
-    <rect x="344" y="575" width="465.96" height="25" rx="3" fill="#58a6ff"/>
-    <text x="822.0" y="598.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">112.96</text>
-    <rect x="344" y="608" width="179.52" height="12" rx="3" fill="#64748b"/>
-    <text x="535.5" y="622.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">43.52</text>
-    <text x="1144.0" y="597.0" font-size="23" fill="#a5b4c5" font-weight="400" text-anchor="end">-7.2%</text>
+    <rect x="344" y="575" width="516.49" height="25" rx="3" fill="#58a6ff"/>
+    <text x="872.5" y="598.0" font-size="22" fill="#f0f6fc" font-weight="600" text-anchor="start">125.21</text>
+    <rect x="344" y="608" width="235.17" height="12" rx="3" fill="#64748b"/>
+    <text x="591.2" y="622.0" font-size="19" fill="#a5b4c5" font-weight="400" text-anchor="start">57.01</text>
+    <text x="1144.0" y="597.0" font-size="23" fill="#3fb950" font-weight="400" text-anchor="end">+7.5%</text>
     <line x1="56.0" y1="644.0" x2="1144.0" y2="644.0" stroke="#303b4a" stroke-width="1" />
-    <text x="56.0" y="679.0" font-size="20" fill="#a5b4c5" font-weight="400" text-anchor="start">Source: supplied report · qwen3.8-27b-fp8-mtp · not a rerun</text>
+    <text x="56.0" y="679.0" font-size="20" fill="#a5b4c5" font-weight="400" text-anchor="start">Source: v19 report, 2026-11-07 · qwen3.8-27b-fp8-mtp</text>
   </g>
 </svg>

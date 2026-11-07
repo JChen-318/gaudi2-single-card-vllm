@@ -66,7 +66,7 @@ def inference_path():
 def throughput(summary):
     parts = begin(700, "Six-workload throughput comparison",
                   "Reported workload-average steady decode and end-to-end throughput at concurrency one. "
-                  "Technical Doc QA leads at 145.61 tokens per second steady decode. Full data is in docs/BENCHMARKS.md.")
+                  "Technical Doc QA leads at 136.42 tokens per second steady decode. Full data is in docs/BENCHMARKS.md.")
     parts += [text(56, 54, "Six workloads. One Gaudi2.", 38, weight=650),
               text(56, 91, "512–131,072 prompt tokens · concurrency 1 · tokens/s", 23, MUTED)]
     for x, color, label in [(56, BLUE, "Steady decode"), (340, "#64748b", "End-to-end")]:
@@ -92,7 +92,7 @@ def throughput(summary):
         parts.append(text(1144, y + 12, "Baseline" if i == 0 else f"{delta:+.1f}%", 23,
                           GREEN if delta > 0 else MUTED, anchor="end"))
     parts += [line(56, 644, 1144, 644),
-              text(56, 679, "Source: supplied report · qwen3.8-27b-fp8-mtp · not a rerun", 20, MUTED)]
+              text(56, 679, "Source: v19 report, 2026-11-07 · qwen3.8-27b-fp8-mtp", 20, MUTED)]
     save("workload-throughput.svg", parts)
 
 
@@ -124,7 +124,7 @@ def context_chart(summary, details, field, title, maximum, ticks, name):
         for x, y in coords:
             parts.append(f'    <circle cx="{x:.2f}" cy="{y:.2f}" r="4.5" fill="{COLORS[i]}" stroke="{BG}" stroke-width="1.5"/>')
     parts += [text(622, 714, "Prompt tokens (log₂ scale; 1K = 1,024)", 22, MUTED, anchor="middle"),
-              text(56, 746, "Source: supplied report · exact values in docs/BENCHMARKS.md", 18, MUTED)]
+              text(56, 746, "Source: v19 report, 2026-11-07 · exact values in docs/BENCHMARKS.md", 18, MUTED)]
     save(name, parts)
 
 
@@ -135,8 +135,8 @@ def main():
         details = list(csv.DictReader(f))
     inference_path()
     throughput(summary)
-    context_chart(summary, details, "prefill_tokens_per_s", "Prefill throughput by prompt length", 5000,
-                  range(0, 5001, 1000), "workload-prefill.svg")
+    context_chart(summary, details, "prefill_tokens_per_s", "Prefill throughput by prompt length", 6000,
+                  range(0, 6001, 1000), "workload-prefill.svg")
     context_chart(summary, details, "decode_tokens_per_s", "Decode throughput by prompt length", 250,
                   range(0, 251, 50), "workload-decode.svg")
     print("Generated inference path and three workload charts.")
