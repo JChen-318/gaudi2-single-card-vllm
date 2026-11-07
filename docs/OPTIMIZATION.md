@@ -799,3 +799,58 @@ H3（5 秒 1344×768，正式启动脚本，稳态第二次请求）：拆分对
 | Cache-DiT / TeaCache | 4 步 Turbo，可缓存的步数太少 |
 | 块稀疏注意力、K/V 降采样 | 见 23.5 |
 | VDN-H3（窗口 softmax + Video DeltaNet，8 步） | 5 秒视频窗口覆盖约一半帧，8 步反而比 4 步 Turbo 慢；只对 10 秒以上的视频有利 |
+| exp2 代替 exp、P·V/Q·Kᵀ 用 FP8 | 不快或更慢（见 23.5） |
+| LiteVAE 等替换 VAE | 有损，需要重新评估画质，未做 |
+
+### 23.7 不求行最大值的 softmax
+
+23.5 里 TPC 除了 exp 还要做一遍行最大值。H3 的 q、k 都经过 RMSNorm，所以每行的分数有上界 `b_i = |q_i|·max_j|k_j|·scale`（Cauchy–Schwarz），用它代替真实行最大值做 `exp(s − b)`，数值不溢出，结果在数学上与 softmax 相同。
+
+| 项 | 位置 | 内容 |
+|---|---|---|
+| 开关 | `vllm_gaudi/omni/attention.py`，`VLLM_GAUDI_OMNI_SDPA_MAXFREE=1`（默认关） | 无掩码、非因果时生效；key 补零到 128 的倍数，行和减去 `pad·exp(−b)` 精确修正 |
+| 分块 | `VLLM_GAUDI_OMNI_SDPA_MAXFREE_CHUNK`（默认 2560 个 query） | 每个 query 块一个编译图，放在 block 编译图之外（`torch.compiler.disable`）：所有块放进一个图时显存过量分配，一次前向变成 47 s |
+| 跳过的层 | `VLLM_GAUDI_OMNI_SDPA_MAXFREE_SKIP_LAYERS`（H3 部署：45,48,49） | 这几层有离群 token，上界远大于真实最大值，exp 下溢成 0 后出现 NaN；这些层仍走 FusedSDPA |
+
+单层 323 ms（fast FusedSDPA 约 400 ms），相对 FP32 误差 0.6–0.7%（fast FusedSDPA 5.8%）。DiT 每次前向 23.3 → 20.1 s，单次请求 116 → 103 s。CPU 测试在 `validation/core/test_omni_sdpa_kv_split.py`（与普通 softmax 对比、按层标记）。
+
+### 23.8 VAE 注意力
+
+H3 视频 VAE 解码器里有 transformer block（每块 1797 个 token，32 头 × 64，一次 28 块）。`vllm_gaudi/omni/minimax_h3_vae.py` 加了 `VLLM_GAUDI_H3_VAE_SOFTMAX_MODE`（默认 None）和 `VLLM_GAUDI_H3_VAE_KV_ALIGN`（默认 0），对齐方式同 23.2。单独测 124 帧 1344×768 解码：
+
+| 配置 | 解码 | PSNR（对原版） |
+|---|---:|---:|
+| 原版 | 17.21 s | 50.9 dB（与参考的取整差） |
+| 只对齐 | 17.31 s | 50.7 dB |
+| 只 fast | 15.80 s | 47.0 dB |
+| fast + 对齐 128 | 14.94 s | 47.1 dB |
+
+H3 部署打开 fast + 对齐 128。
+
+### 23.9 H3 最终结果（正式启动脚本，5 秒 1344×768，4 步 LightX2V Turbo）
+
+| | 耗时 |
+|---|---:|
+| DiT 每次前向 | 20.09 s（4 次共 84.2 s） |
+| 视频 VAE 解码 | 11.3 s |
+| 文本编码 | 3.9 s |
+| **单次请求（稳态）** | **100.6 s**（原版 191.5 s，-47%） |
+| 首次请求（含初始化与编译） | 166 s |
+
+与 23.7 的版本（VAE 未改）同种子对比，只差 VAE 注意力：视频 PSNR 平均 38.8–39.9 dB（Y 37.4–38.5 dB），构图与运动一致。
+
+## 24. vLLM-Omni 媒体模型：Qwen-Image 2.1
+
+部署代码在镜像里（`qwen_worker.py`、`image_api.py`，不在本仓库），改动都在 worker 里打补丁：
+
+| 项 | 内容 |
+|---|---|
+| VAE 自动分块 | 超过 1536² 像素才分块（`QWEN_VAE_AUTO_TILING`、`QWEN_VAE_MAX_UNTILED_PIXELS`） |
+| 文本长度分桶 | 文本 token 补齐到 64 的倍数（`QWEN_TEXT_BUCKET=64`），编译图按桶复用；补齐行在 RoPE 的帧轴上跳过位置，否则图像位置整体偏移 |
+| 掩码 | 布尔掩码改成 0/-inf 偏置（同 23.4） |
+| 区域编译 | `QWEN_HPU_COMPILE=1`，同 23.4，静态形状 |
+| 启动预热 | 启动时按 1024² 跑 3 个提示词，首个用户请求不再编译 |
+
+1024² 文生图：HTTP 请求 6.5–7.5 s → 4.4 s，服务端 3.59 s（DiT 3 步约 0.32 s/步）。1536² 17.0 s，2048² 41.6 s，图像编辑 7.0 s。
+
+在线 FP8（需要先 import `vllm_gaudi.ops.hpu_fp8` 注册 HPU 方法）：1024² 服务端 3.59 → 3.2 s（-11%），但文生图同种子 PSNR 只有 17–26 dB，构图会变；跳过 `re:.*img_mlp.*` 后 3.49 s，差异仍大。不开。
