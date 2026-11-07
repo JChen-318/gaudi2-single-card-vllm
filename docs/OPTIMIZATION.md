@@ -736,3 +736,42 @@ GDN 层每层约 5.3 ms，46 层约 243 ms，与上下文无关。16 万 token �
 | GDN 分块的 FP32 逐元素运算写成融合 TPC 核 | 需要新内核，等新的 trace 定位后再做 |
 | 去掉 GDN 分块前的 DMA 转置（约 3%） | trace 里的 DMA 事件没有模块名，定位不到具体的转置 |
 | 只把注意力的 QK 改成 FP8 | 未测；QK 内维 256 只能跑到 MME 峰值的 54%，理论上限是 128K 时整体约 10% |
+
+## 23. vLLM-Omni 媒体模型：MiniMax H3 的 DiT 注意力
+
+同一张卡上还部署了 vLLM-Omni 的 MiniMax H3（文生视频+音频，FL2VA，LightX2V 4 步 LoRA，在线 FP8，单卡 module 7），走本仓库的 `vllm_gaudi/omni`。
+
+### 23.1 trace 指出的位置
+
+5 秒 1344×768 视频，稳态一次请求 191.5 s：DiT 4 次前向 169 s（每次 42.36 s），VAE 解码 14.4 s，文本编码 3.8 s。一次前向的 HPU trace：设备空闲 0.08 s，FusedSDPA 每层 696 ms、共 34.8 s，权重 GEMM 约 4 s，其余约 3.5 s。注意力只跑到约 60 TFLOPS。
+
+单独测 FusedSDPA（56 头 × 128）：37,750 个 key（模型实际长度）697 ms，37,760（补到 128 的倍数）527 ms，38,272 是 533 ms。慢 30% 的原因是 key 长度不是 128 的倍数；只补 Q 没用，用 `[1,1,1,L]` 掩码屏蔽补齐部分和不对齐一样慢，`valid_sequence_lengths` 只支持因果注意力。
+
+### 23.2 改动
+
+| 项 | 位置 | 内容 |
+|---|---|---|
+| K/V 拆分对齐 | `vllm_gaudi/omni/attention.py`，`VLLM_GAUDI_OMNI_SDPA_KV_ALIGN`（默认 128，0 = 关） | 无掩码、非因果、key 长度 ≥ 4096 且不是 128 的倍数时，对齐的头段和不足 128 的尾段各走一次 `sdpa_recomp_fwd`，用两段的行最大值和 1/行和精确合并（`o1 + (o2 − o1)·b`，b 为尾段份额，输出 dtype 内完成）。两段都必须是连续张量：传切片视图时 FusedSDPA 在部分长度下结果错误（36,864/37,750 处误差 13%） |
+| `PT_HPU_SDPA_HEAD_FACTOR=2` | H3 部署启动脚本 | 图编译器的头切分因子，注意力再快约 4%，输出与不设逐比特相同 |
+| fast softmax | H3 部署启动脚本，`VLLM_GAUDI_OMNI_SDPA_SOFTMAX_MODE=fast` | 单层再快约 24%，注意力相对 FP32 的误差 1.5% → 5.8%；视频经对比图人工确认后开启 |
+
+CPU 测试 `validation/core/test_omni_sdpa_kv_split.py`（6 项）：拆分结果与整段精确 softmax 注意力一致（含 GQA、fast 模式常数因子）。
+
+### 23.3 结果（5 秒 1344×768，稳态第二次请求）
+
+| 配置 | DiT 每次前向 | 单次请求 |
+|---|---:|---:|
+| 原版 | 42.36 s | 191.5 s |
+| K/V 拆分对齐 | 34.03 s | 158.4 s |
+| + `HEAD_FACTOR=2` | 32.79 s | 154.3 s |
+| + fast softmax（不含 HEAD_FACTOR 实测） | 27.53 s | 132.2 s |
+
+原版同种子重跑逐比特相同；拆分对齐后视频构图、镜头运动一致，细节不同（PSNR 约 18 dB，扩散过程把注意力的微小数值差异放大），注意力本身相对 FP32 的误差不变（1.548% 对 1.539%）。
+
+### 23.4 没有做或不采用的
+
+| 方向 | 原因 |
+|---|---|
+| `PT_HPU_SDPA_BR/BC_FACTOR`、`QKV_SLICE_MODE_FWD`、`Q_SLICE_MODE`、`RESHAPED_SOFTMAX_MODE` | eager 下实测无影响 |
+| 补齐 Q 或用掩码屏蔽补齐的 key | 不提速（见 23.1） |
+| Cache-DiT / TeaCache | 4 步 Turbo，可缓存的步数太少 |
