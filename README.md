@@ -75,19 +75,22 @@ The same card also serves two diffusion models through vLLM-Omni. They run on th
 | Model | Task | Before | Now | Change |
 |:---|:---|---:|---:|---:|
 | **MiniMax H3** (FL2VA, LightX2V 4-step Turbo LoRA, online FP8) | 5 s text-to-video + audio, 1344×768, 124 frames | 191.5 s | **100.6 s** | **−47%** |
+| **MiniMax H3**, experimental [direct MME/TPC attention](native/mme-direct-attention)† | same request | 191.5 s | **79.7 s** | **−58%** |
 | **Qwen-Image 2.1** (BF16) | Text-to-image 1024², HTTP request | 6.5–7.5 s | **4.4 s** | ≈ −35% |
+
+† Measured 2026-11-09. Opt-in only: hand-programmed MME/TPC attention in 47 of 50 DiT layers, pinned text-encoder offload, and a resident DiT for t2va (VAE tile batch 4). The default launcher still gives 100.6 s. Sampled per-layer attention error against FP32 is below 1% RMS. The video still differs from production by about 18 dB PSNR, the same gap as between production and plain FusedSDPA, so this is not a production-qualified replacement. See [§23.10](docs/OPTIMIZATION.md#2310-直接编程-mmetpc-注意力实验路径).
 
 <details>
 <summary><strong>Where the time goes and what changed</strong></summary>
 
 **MiniMax H3**, one 5-second video:
 
-| Stage | Before | Now |
-|:---|---:|---:|
-| DiT forward ×4 | 42.36 s each | **20.09 s each** |
-| Video VAE decode | 14.4 s | 11.3 s |
-| Text encoding | 3.8 s | 3.9 s |
-| **Request** | **191.5 s** | **100.6 s** (first request 166 s) |
+| Stage | Before | Now | Experimental† |
+|:---|---:|---:|---:|
+| DiT forward ×4 | 42.36 s each | **20.09 s each** | **16.04 s each** |
+| Video VAE decode | 14.4 s | 11.3 s | 11.7 s |
+| Text encoding | 3.8 s | 3.9 s | 3.1 s |
+| **Request** | **191.5 s** | **100.6 s** (first request 166 s) | **79.7 s** |
 
 Each step below was added cumulatively and measured on the same 5-second request:
 
@@ -100,6 +103,8 @@ Each step below was added cumulatively and measured on the same 5-second request
 | Regional `torch.compile` of the DiT blocks (HPU backend) | 116 s |
 | Row-max-free softmax: q/k are RMS-normalised, so the Cauchy–Schwarz bound replaces the row max; one compiled graph per 2,560-query chunk | 103.2 s |
 | VAE attention with fast softmax and aligned keys | **100.6 s** |
+| *Experimental:* hand-programmed MME/TPC attention, opt-in (same-day re-measured baseline 100.45 s) | 84.4 s |
+| *Experimental:* plus pinned text-encoder offload and resident DiT (t2va, VAE tile 4) | **79.7 s** |
 
 Attention is now about 300–315 ms per layer. Its two matrix products need only about 180 ms on the MME. The rest is the score matrix making four trips through HBM, about 640 GB per layer at roughly 2 TB/s. Tile shapes where the graph compiler keeps the score tile in SRAM do not help: there the TPC exponential becomes an equally high limit (282 ms for QK^T → exp → row sum). Block-sparse attention, K/V pooling, FP8 attention products, polynomial and bit-trick exponentials, graph-compiler slicing knobs, two-graph splits, and other tilings were measured and rejected. Details: [optimization log §23](docs/OPTIMIZATION.md#23-vllm-omni-媒体模型minimax-h3-的-dit-注意力).
 
@@ -126,7 +131,7 @@ The Omni switches are environment variables and default to off: `VLLM_GAUDI_OMNI
 - **Host/device overlap.** Lookahead submission, device-side draft preparation, vectorized indices, and compiled regions reduce host preparation and submission gaps.
 - **Native kernels and FP8.** Fused GDN recurrence, specialized rejection sampling, faster candidate selection, FP8 vocabulary projection, and FP8 KV storage target device time and memory use.
 - **Image input and recipe caching.** Fixed vision buckets compile during warm-up. A TPC kernel-library shim enables device recipe caching across the native libraries.
-- **Diffusion models (vLLM-Omni).** DiT attention with aligned key splitting and a row-max-free softmax, regional compilation of the transformer blocks, additive masks, and a faster video VAE attention. MiniMax H3 video takes 100.6 s instead of 191.5 s; Qwen-Image 2.1 takes 4.4 s per 1024² image.
+- **Diffusion models (vLLM-Omni).** DiT attention with aligned key splitting and a row-max-free softmax, regional compilation of the transformer blocks, additive masks, and a faster video VAE attention. MiniMax H3 video takes 100.6 s instead of 191.5 s, or 79.7 s with the experimental hand-programmed MME/TPC attention path; Qwen-Image 2.1 takes 4.4 s per 1024² image.
 
 Implementation details and before/after measurements are in the [optimization log](docs/OPTIMIZATION.md).
 
@@ -274,6 +279,7 @@ vllm-gaudi/               Gaudi plugin and FlashInfer-Gaudi Python/C++/TPC sourc
 native/mtp-sampling/      Stochastic rejection sampling kernels and PyTorch operator
 native/tpc-kernel-shim/   Multi-library shim for device recipe caching
 native/gdn-fused-kernel/  Fused GDN kernel, simulator, and device verification
+native/mme-direct-attention/  Experimental hand-programmed MME/TPC attention for MiniMax H3
 validation/               CPU-side validation
 tools/                    Benchmarks and trace analysis
 examples/                 Historical standalone launchers
