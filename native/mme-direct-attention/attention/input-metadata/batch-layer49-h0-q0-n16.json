@@ -1,0 +1,15 @@
+{
+  "source": "/mnt/sas/tmp/minimax-h3/qkv/qkv-call1-layer49.pt",
+  "head": 0,
+  "query_start": 0,
+  "blocks": 16,
+  "full_head": false,
+  "valid_queries": 2048,
+  "group_blocks": 16,
+  "keys": 37760,
+  "valid_keys": 37750,
+  "scale": 0.08838834764831845,
+  "bound_max": 71.84397888183594,
+  "bytes": 20906016,
+  "sha256": "85b64b94f3c44276df53df41a813af3f54009a159b4b341e7d10bf5d6126b199"
+}

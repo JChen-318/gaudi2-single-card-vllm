@@ -1,0 +1,132 @@
+{
+  "saved_at": "2026-11-09T18:21:59+08:00",
+  "status": "PAUSED_AT_USER_QUOTA_THRESHOLD",
+  "quota_primary_used": 85,
+  "quota_secondary_used": 37,
+  "root_cause_resolved": false,
+  "new_device_experiments_started": false,
+  "existing_additional_results": [
+    {
+      "log": "rawbw2-A-n1024.log",
+      "rows": 128,
+      "n": 1024,
+      "fp32": false,
+      "us": 9.7659912109375,
+      "descriptors": 2,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-A-n18944.log",
+      "rows": 128,
+      "n": 18944,
+      "fp32": false,
+      "us": 13.57196044921875,
+      "descriptors": 4,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-A-n37760.log",
+      "rows": 128,
+      "n": 37760,
+      "fp32": false,
+      "us": 15.66400146484375,
+      "descriptors": 2,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-A-n9472.log",
+      "rows": 128,
+      "n": 9472,
+      "fp32": false,
+      "us": 12.2440185546875,
+      "descriptors": 4,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-B-n4736.log",
+      "rows": 1024,
+      "n": 4736,
+      "fp32": false,
+      "us": 17.67999267578125,
+      "descriptors": 6,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C16-n1024.log",
+      "rows": 128,
+      "n": 1024,
+      "fp32": false,
+      "us": 9.81903076171875,
+      "descriptors": 2,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C16-n18944.log",
+      "rows": 128,
+      "n": 18944,
+      "fp32": false,
+      "us": 14.822998046875,
+      "descriptors": 6,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C16-n37760.log",
+      "rows": 128,
+      "n": 37760,
+      "fp32": false,
+      "us": 17.64898681640625,
+      "descriptors": 6,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C32-n1024.log",
+      "rows": 128,
+      "n": 1024,
+      "fp32": true,
+      "us": 9.9219970703125,
+      "descriptors": 2,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C32-n18944.log",
+      "rows": 128,
+      "n": 18944,
+      "fp32": true,
+      "us": 17.53399658203125,
+      "descriptors": 6,
+      "exact": true
+    },
+    {
+      "log": "rawbw2-C32-n37760.log",
+      "rows": 128,
+      "n": 37760,
+      "fp32": true,
+      "us": 23.5980224609375,
+      "descriptors": 6,
+      "exact": true
+    }
+  ],
+  "confounds": [
+    "A-series changes descriptor count 2/4/4/2: not a clean same-program bandwidth slope",
+    "C16/C32 series also changes count 2 to6 across output sizes; datatype-paired comparisons at the same size are more informative",
+    "B-n9472 result absent from local completed results; no result may be invented",
+    "No same-output varying-reduction-K device evidence yet; no write-active counters"
+  ],
+  "next_actions": [
+    "When quota permits: inspect device occupancy and current server logs first; do not overwrite existing log names",
+    "Capture compiler descriptors at fixed M/N and K32/64/128/256; CPU-audit geometry/ownership and dtype, and verify full integer GEMM before raw timed tests",
+    "Repeat same-geometry QK per engine with matched descriptor count and multiple repetitions per submission; measure host floor separately",
+    "Separate output dtype cost using matched descriptors; collect validated profiler timeline before changing unknown writeback/credit controls",
+    "Distinguish 2 logical engines from 4 physical master/slave portions in the 3.2TB/s definition; verify source not a read+write aggregate"
+  ],
+  "external_sources": [
+    {
+      "url": "https://forum.habana.ai/t/about-mme-profiling-result-with-intel-gaudi-software/1272/3",
+      "finding": "Vendor forum explains two logical MMEs comprise four physical portions and multiple geometry modes; not proof of the user 3.2TB/s write peak"
+    },
+    {
+      "url": "https://forum.habana.ai/t/questions-regarding-the-architecture-about-habana-gaudi/355/11",
+      "finding": "Search result references Gaudi2 MME specification post; full detail unavailable: web502/direct SSL EOF; do not infer its missing bandwidth specification"
+    }
+  ]
+}

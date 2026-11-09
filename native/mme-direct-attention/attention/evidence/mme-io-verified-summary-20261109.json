@@ -1,0 +1,654 @@
+{
+  "checked_at": "2026-11-09T19:32:47+08:00",
+  "scope": "Gaudi2 BF16 GEMM AB/ABt/AtB/AtBt; installed SynapseAI 1.24.1-482; one logical MME includes master/slave physical portions",
+  "source_boundary": "Driver register headers and compiler descriptor text are source evidence. Numeric rate and geometry implementations were checked in the installed libSynapseMme.so, not obtained as public C++ source. No REA was used.",
+  "library_sha256": "467e0b56eb3b036ca89e5bbedcd2f7679b7017894456edf393015dcbea3d7bcd",
+  "hal_getters": {
+    "getMmeNr": 2,
+    "getOutputPortsNr": 8,
+    "getClSize_bytes": 128,
+    "getPortSizeInElements": 64,
+    "getSinglePortBw_raw": 200,
+    "getClkFreqMHz": 1650
+  },
+  "bw_unit_status": "The traced software bandwidth interface uses GB/s (gigabytes per second), not bytes per cycle. This evidence comes from the Gaudi3 producer and common compiler consumer, not an explicit unit on the Gaudi2 getter. The normal Gaudi2 memory-attribute callback is empty in this build. Do not claim the Gaudi3 bandwidth formula is an active Gaudi2 performance limit. Other consumers were not exhaustively excluded.",
+  "port_counts": {
+    "scope": "CPU-only installed-library geometry query, not hardware throughput measurement or recovered C++ source",
+    "library_sha256": "467e0b56eb3b036ca89e5bbedcd2f7679b7017894456edf393015dcbea3d7bcd",
+    "single_port_bw_getter": 200,
+    "single_port_bw_unit": "The traced software bandwidth interface uses GB/s (gigabytes per second), not bytes per cycle. This evidence comes from the Gaudi3 producer and common compiler consumer, not an explicit unit on the Gaudi2 getter.",
+    "types": {
+      "9": "fp8_143",
+      "10": "fp8_152",
+      "11": "fp16",
+      "12": "bf16",
+      "13": "fp32"
+    },
+    "operations": {
+      "5": "ab",
+      "6": "abt",
+      "7": "atb",
+      "8": "atbt"
+    },
+    "operand_order": [
+      "A read",
+      "B read",
+      "C write"
+    ],
+    "records": [
+      {
+        "operation": "ab",
+        "operation_enum": 5,
+        "geometry": "4xw",
+        "geometry_enum": 3,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "ab",
+        "operation_enum": 5,
+        "geometry": "2xw",
+        "geometry_enum": 4,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "ab",
+        "operation_enum": 5,
+        "geometry": "2xh",
+        "geometry_enum": 5,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "ab",
+        "operation_enum": 5,
+        "geometry": "4xh",
+        "geometry_enum": 6,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "abt",
+        "operation_enum": 6,
+        "geometry": "4xw",
+        "geometry_enum": 3,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "abt",
+        "operation_enum": 6,
+        "geometry": "2xw",
+        "geometry_enum": 4,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "abt",
+        "operation_enum": 6,
+        "geometry": "2xh",
+        "geometry_enum": 5,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "abt",
+        "operation_enum": 6,
+        "geometry": "4xh",
+        "geometry_enum": 6,
+        "dtype": "bf16",
+        "transpose": [
+          true,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atb",
+        "operation_enum": 7,
+        "geometry": "4xw",
+        "geometry_enum": 3,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atb",
+        "operation_enum": 7,
+        "geometry": "2xw",
+        "geometry_enum": 4,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atb",
+        "operation_enum": 7,
+        "geometry": "2xh",
+        "geometry_enum": 5,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atb",
+        "operation_enum": 7,
+        "geometry": "4xh",
+        "geometry_enum": 6,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          false
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atbt",
+        "operation_enum": 8,
+        "geometry": "4xw",
+        "geometry_enum": 3,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atbt",
+        "operation_enum": 8,
+        "geometry": "2xw",
+        "geometry_enum": 4,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atbt",
+        "operation_enum": 8,
+        "geometry": "2xh",
+        "geometry_enum": 5,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      },
+      {
+        "operation": "atbt",
+        "operation_enum": 8,
+        "geometry": "4xh",
+        "geometry_enum": 6,
+        "dtype": "bf16",
+        "transpose": [
+          false,
+          true
+        ],
+        "chip_ports": [
+          8,
+          8,
+          8
+        ],
+        "mme_ports": [
+          4,
+          4,
+          4
+        ],
+        "modeled_GBps_per_mme": {
+          "A": 800,
+          "B": 800,
+          "C": 800
+        },
+        "modeled_GBps_chip": {
+          "A": 1600,
+          "B": 1600,
+          "C": 1600
+        },
+        "modeled_rate_status": "Conditional multiplication only; not measured per-port bandwidth or a confirmed Gaudi2 cost-model limit"
+      }
+    ]
+  },
+  "bandwidth_model_TBps": [
+    {
+      "direction": "Memory -> MME A",
+      "per_logical_mme": 0.8,
+      "chip_two_mmes": 1.6,
+      "ports_per_mme": 4
+    },
+    {
+      "direction": "Memory -> MME B",
+      "per_logical_mme": 0.8,
+      "chip_two_mmes": 1.6,
+      "ports_per_mme": 4
+    },
+    {
+      "direction": "Memory -> MME A+B",
+      "per_logical_mme": 1.6,
+      "chip_two_mmes": 3.2,
+      "ports_per_mme": 8
+    },
+    {
+      "direction": "MME C -> Memory",
+      "per_logical_mme": 0.8,
+      "chip_two_mmes": 1.6,
+      "ports_per_mme": 4
+    }
+  ],
+  "measurements": {
+    "stock_compiler_output_slopes": [
+      {
+        "k": 32,
+        "slope_TBps_out": 1.6676691243061366,
+        "slope_TFLOPS": 53.36541197779637,
+        "intercept_us": 19.21949054424961
+      },
+      {
+        "k": 64,
+        "slope_TBps_out": 1.638226091255266,
+        "slope_TFLOPS": 104.84646984033702,
+        "intercept_us": 14.643944127278218
+      },
+      {
+        "k": 128,
+        "slope_TBps_out": 1.4308397797942363,
+        "slope_TFLOPS": 183.14749181366224,
+        "intercept_us": 20.159478299319744
+      },
+      {
+        "k": 256,
+        "slope_TBps_out": 1.098407426597474,
+        "slope_TFLOPS": 281.1923012089533,
+        "intercept_us": 26.114415636079173
+      },
+      {
+        "k": 512,
+        "slope_TBps_out": 0.7426974906938176,
+        "slope_TFLOPS": 380.2611152352346,
+        "intercept_us": 37.034854499830146
+      }
+    ],
+    "pv_512x9472_by9472x128": {
+      "time_us": 5.944855446513329,
+      "TFLOPS": 208.83838054096853,
+      "logical_A_read_TBps": 1.6315498479763166,
+      "logical_B_read_TBps": 0.40788746199407916,
+      "logical_combined_read_TBps": 2.039437309970396,
+      "scope": "Existing compiler batch-size slope and minimum logical bytes, not new physical bus counters"
+    }
+  },
+  "source_crosscheck": {
+    "descriptor": "fixtures/g-m512n9472k128/mme_debug/act_0_mme_descriptor_dump_0.txt",
+    "input_enabled_per_physical_side": [
+      "SB0",
+      "SB2",
+      "SB3",
+      "SB4"
+    ],
+    "input_disabled": [
+      "SB1"
+    ],
+    "output_AGU": [
+      "AguOut0 master/slave",
+      "AguOut1 master/slave"
+    ],
+    "common_functions": [
+      "CommonGeoAttr::getMmePortsNr",
+      "CommonGeoAttr::getChipPortsNr"
+    ],
+    "datatypes_note": "Internal EMmeDataType bf16=12; hardware descriptor dtype code BF16=9. These are different enums; do not confuse them."
+  },
+  "conclusions": [
+    "Gaudi2 BF16 CPU geometry queries return per-MME A/B/C counts 4/4/4 and chip 8/8/8 in the 16 tested configurations.",
+    "Existing compiler output measurements 1.638/1.668TB/s chip are effective measured rates, not physical write-active counters.",
+    "External single-MME MME-to-SRAM 3.2TB/s remains unverified and has not been disproved by these measurements.",
+    "Measured 1.64-1.67TB/s cannot rule out a 2.64TB/s theoretical peak: lower sustained throughput does not contradict a higher peak.",
+    "0.8TB/s per MME is not an established Gaudi2 silicon maximum or proven enforced cost-model limit.",
+    "PV logical A traffic near 1.6TB/s is consistent with an input bottleneck hypothesis but does not establish an independent physical A budget from this getter."
+  ],
+  "device_activity": "CPU-only Docker without accelerator device mappings. Existing video runner observed; no new GPU work, no production source changes.",
+  "updated_at": "2026-11-09T19:50:46+08:00",
+  "bandwidth_model_status": "Conditional arithmetic only: port counts times raw200 interpreted as GB/s. Not demonstrated as an active Gaudi2 bandwidth cost model or physical peak.",
+  "unit_followup": "mme-bw-unit-verdict-20261109.json"
+}

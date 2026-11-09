@@ -1,0 +1,653 @@
+{
+  "runs": [
+    {
+      "tag": "baseline-20261109a",
+      "metadata": [
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T07:20:34.006873+00:00",
+          "wall_seconds": 163.30155698000453,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2101",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 07:20:33 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-be8d177d979905c8",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "163.268",
+            "x-stage-durations": "{\"queue_wait_ms\":0.678595039062202,\"stage_0_gen_ms\":162296.84233665466}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "21278250",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-be8d177d979905c8",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 163.268,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.678595039062202,
+              "stage_0_gen_ms": 162296.84233665466
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-baseline-20261109a/out0.mp4",
+          "output_bytes": 21278250
+        },
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T07:23:17.664409+00:00",
+          "wall_seconds": 101.46195006102789,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2102",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 07:23:16 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-964be44c9c4d1136",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "101.425",
+            "x-stage-durations": "{\"queue_wait_ms\":0.5947469035163522,\"stage_0_gen_ms\":100481.2741279602}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "26818342",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-964be44c9c4d1136",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 101.425,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.5947469035163522,
+              "stage_0_gen_ms": 100481.2741279602
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-baseline-20261109a/out1.mp4",
+          "output_bytes": 26818342
+        },
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T07:24:59.499055+00:00",
+          "wall_seconds": 101.53220545093063,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2101",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 07:24:59 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-8d4e9978c1c212e8",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "101.502",
+            "x-stage-durations": "{\"queue_wait_ms\":0.5393320461735129,\"stage_0_gen_ms\":100615.66877365112}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "21278250",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-8d4e9978c1c212e8",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 101.502,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.5393320461735129,
+              "stage_0_gen_ms": 100615.66877365112
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-baseline-20261109a/out2.mp4",
+          "output_bytes": 21278250
+        }
+      ],
+      "records": [
+        {
+          "time": 1794208996.1944604,
+          "total_s": 162.164,
+          "stages_s": {
+            "_encode_text_hidden": [
+              8.989
+            ],
+            "encode_prompt": [
+              51.125
+            ],
+            "_prepare_request_inputs": [
+              51.156
+            ],
+            "_build_denoise_inputs": [
+              0.078
+            ],
+            "dit_forward": [
+              29.087,
+              21.089,
+              20.089,
+              20.091
+            ],
+            "_unpack_denoised_rows": [
+              0.044
+            ],
+            "diffuse": [
+              94.298
+            ],
+            "video_decode_latent": [
+              15.303
+            ],
+            "audio_decode_latent": [
+              0.386
+            ],
+            "decode": [
+              16.656
+            ]
+          },
+          "phases_s": {}
+        },
+        {
+          "time": 1794209098.0620604,
+          "total_s": 100.386,
+          "stages_s": {
+            "_encode_text_hidden": [
+              3.71
+            ],
+            "encode_prompt": [
+              3.721
+            ],
+            "_prepare_request_inputs": [
+              3.733
+            ],
+            "_build_denoise_inputs": [
+              0.067
+            ],
+            "dit_forward": [
+              20.086,
+              20.084,
+              20.084,
+              20.083
+            ],
+            "_unpack_denoised_rows": [
+              0.018
+            ],
+            "diffuse": [
+              84.153
+            ],
+            "video_decode_latent": [
+              11.251
+            ],
+            "audio_decode_latent": [
+              0.234
+            ],
+            "decode": [
+              12.444
+            ]
+          },
+          "phases_s": {}
+        },
+        {
+          "time": 1794209200.032275,
+          "total_s": 100.523,
+          "stages_s": {
+            "_encode_text_hidden": [
+              3.81
+            ],
+            "encode_prompt": [
+              3.821
+            ],
+            "_prepare_request_inputs": [
+              3.832
+            ],
+            "_build_denoise_inputs": [
+              0.068
+            ],
+            "dit_forward": [
+              20.089,
+              20.092,
+              20.091,
+              20.084
+            ],
+            "_unpack_denoised_rows": [
+              0.018
+            ],
+            "diffuse": [
+              84.153
+            ],
+            "video_decode_latent": [
+              11.269
+            ],
+            "audio_decode_latent": [
+              0.232
+            ],
+            "decode": [
+              12.482
+            ]
+          },
+          "phases_s": {}
+        }
+      ],
+      "steady_pipeline_s": 100.4545,
+      "steady_request_wall_s": 101.49707775597926,
+      "steady_dit_s": 80.34649999999999,
+      "steady_video_decode_s": 11.26,
+      "steady_peak_memory_mib": 96863.215
+    },
+    {
+      "tag": "direct-sgc-20261109e",
+      "metadata": [
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T09:57:14.379648+00:00",
+          "wall_seconds": 141.75511980603915,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2101",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 09:57:14 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-8bde13ce3facd3ee",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "141.726",
+            "x-stage-durations": "{\"queue_wait_ms\":0.38960506208240986,\"stage_0_gen_ms\":140752.19631195068}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "21209735",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-8bde13ce3facd3ee",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 141.726,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.38960506208240986,
+              "stage_0_gen_ms": 140752.19631195068
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-direct-sgc-20261109e/out0.mp4",
+          "output_bytes": 21209735
+        },
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T09:59:36.551245+00:00",
+          "wall_seconds": 85.6149659960065,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2102",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 09:59:36 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-927385481cce9d52",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "85.581",
+            "x-stage-durations": "{\"queue_wait_ms\":0.5763630615547299,\"stage_0_gen_ms\":84578.01532745361}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "26559191",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-927385481cce9d52",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 85.581,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.5763630615547299,
+              "stage_0_gen_ms": 84578.01532745361
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-direct-sgc-20261109e/out1.mp4",
+          "output_bytes": 26559191
+        },
+        {
+          "schema_version": 1,
+          "status": "pass",
+          "started_at": "2026-11-09T10:01:02.498969+00:00",
+          "wall_seconds": 85.51917101000436,
+          "api_url": "http://127.0.0.1:8098/v1/videos/sync",
+          "task": "t2va",
+          "request": {
+            "prompt": "A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.",
+            "fps": "24",
+            "seed": "2101",
+            "extra_params": "{\"task\":\"t2va\",\"duration\":5.167,\"audio_flow_shift\":3.0}",
+            "num_inference_steps": "5",
+            "flow_shift": "6.0",
+            "lora": "{\"name\":\"minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16\",\"path\":\"/mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors\",\"scale\":1.0}",
+            "width": "1344",
+            "height": "768",
+            "aspect_ratio": "16:9"
+          },
+          "sampling_contract": {
+            "request_field": "num_inference_steps",
+            "meaning": "sigma_grid_points_including_terminal_zero",
+            "field_was_omitted": false,
+            "sampler": "lightx2v_turbo_euler_eta0",
+            "profile": "lightx2v_fl2v_turbo_4step_v1.0_768p_bf16",
+            "resolved_sigma_points": 5,
+            "expected_joint_dit_forwards": 4,
+            "video_flow_shift": 6.0,
+            "audio_flow_shift": 3.0,
+            "output_short_edge": 768,
+            "precision": "bf16_base_plus_bf16_lora",
+            "video_and_audio_share_each_forward": true
+          },
+          "references": [],
+          "response_headers": {
+            "date": "Mon, 09 Nov 2026 10:01:02 GMT",
+            "server": "uvicorn",
+            "x-request-id": "video_sync-9d6527af9cc52d3b",
+            "x-model": "MiniMaxAI/MiniMax-H3",
+            "x-inference-time-s": "85.490",
+            "x-stage-durations": "{\"queue_wait_ms\":0.4066360415890813,\"stage_0_gen_ms\":84506.08897209167}",
+            "x-peak-memory-mb": "96863.215",
+            "content-length": "21209735",
+            "content-type": "video/mp4",
+            "vary": "Origin"
+          },
+          "response_metrics": {
+            "request_id": "video_sync-9d6527af9cc52d3b",
+            "model": "MiniMaxAI/MiniMax-H3",
+            "server_inference_seconds": 85.49,
+            "stage_durations_seconds": {
+              "queue_wait_ms": 0.4066360415890813,
+              "stage_0_gen_ms": 84506.08897209167
+            },
+            "peak_device_memory_mb": 96863.215
+          },
+          "output": "/home/a/gsv-data/media/mme-direct-20261108/repro/attention/evidence/video-direct-sgc-20261109e/out2.mp4",
+          "output_bytes": 21209735
+        }
+      ],
+      "records": [
+        {
+          "time": 1794218375.0342238,
+          "total_s": 140.638,
+          "stages_s": {
+            "_encode_text_hidden": [
+              10.814
+            ],
+            "encode_prompt": [
+              46.408
+            ],
+            "_prepare_request_inputs": [
+              46.419
+            ],
+            "_build_denoise_inputs": [
+              0.076
+            ],
+            "dit_forward": [
+              23.821,
+              17.609,
+              16.048,
+              16.049
+            ],
+            "_unpack_denoised_rows": [
+              0.026
+            ],
+            "diffuse": [
+              77.377
+            ],
+            "video_decode_latent": [
+              15.456
+            ],
+            "audio_decode_latent": [
+              0.327
+            ],
+            "decode": [
+              16.786
+            ]
+          },
+          "phases_s": {}
+        },
+        {
+          "time": 1794218461.0128398,
+          "total_s": 84.449,
+          "stages_s": {
+            "_encode_text_hidden": [
+              3.839
+            ],
+            "encode_prompt": [
+              3.85
+            ],
+            "_prepare_request_inputs": [
+              3.863
+            ],
+            "_build_denoise_inputs": [
+              0.067
+            ],
+            "dit_forward": [
+              16.07,
+              16.08,
+              16.044,
+              16.041
+            ],
+            "_unpack_denoised_rows": [
+              0.017
+            ],
+            "diffuse": [
+              68.071
+            ],
+            "video_decode_latent": [
+              11.279
+            ],
+            "audio_decode_latent": [
+              0.235
+            ],
+            "decode": [
+              12.46
+            ]
+          },
+          "phases_s": {}
+        },
+        {
+          "time": 1794218546.8849745,
+          "total_s": 84.376,
+          "stages_s": {
+            "_encode_text_hidden": [
+              3.772
+            ],
+            "encode_prompt": [
+              3.783
+            ],
+            "_prepare_request_inputs": [
+              3.795
+            ],
+            "_build_denoise_inputs": [
+              0.068
+            ],
+            "dit_forward": [
+              16.023,
+              16.028,
+              16.068,
+              16.088
+            ],
+            "_unpack_denoised_rows": [
+              0.018
+            ],
+            "diffuse": [
+              67.997
+            ],
+            "video_decode_latent": [
+              11.28
+            ],
+            "audio_decode_latent": [
+              0.285
+            ],
+            "decode": [
+              12.53
+            ]
+          },
+          "phases_s": {}
+        }
+      ],
+      "steady_pipeline_s": 84.4125,
+      "steady_request_wall_s": 85.56706850300543,
+      "steady_dit_s": 64.221,
+      "steady_video_decode_s": 11.279499999999999,
+      "steady_peak_memory_mib": 96863.215
+    }
+  ],
+  "matched_requests": true,
+  "warmup_excluded": true,
+  "pipeline_time_reduction": 0.15969418990687323,
+  "request_time_reduction": 0.1569504226641184,
+  "dit_time_reduction": 0.2006994704187487,
+  "quality": [
+    {
+      "request": 0,
+      "psnr": "[Parsed_psnr_0 @ 0x7fc668004440] PSNR y:17.188273 u:27.966974 v:35.307090 average:18.842999 min:18.265185 max:19.417436",
+      "sha256": [
+        "73a83ae766fc565899242ae48eac3a8ff729e9dd44fb23005f8f93152cb43bd8",
+        "eccf55d19b801e0f2c21fea37b60dfd0f09c40feeeb11a1f2afa314f78d20014"
+      ]
+    },
+    {
+      "request": 1,
+      "psnr": "[Parsed_psnr_0 @ 0x754d70004440] PSNR y:16.190934 u:26.503649 v:35.682515 average:17.840062 min:16.688391 max:18.171934",
+      "sha256": [
+        "feafa0200dd6d56ae844f154209503639ddc230c5cf5136755be20b8f536278b",
+        "786c5092582ccd52ec28f13bc0929fcfb7a7b4167e8925324d52862b36cf3638"
+      ]
+    },
+    {
+      "request": 2,
+      "psnr": "[Parsed_psnr_0 @ 0x752478004440] PSNR y:17.188273 u:27.966974 v:35.307090 average:18.842999 min:18.265185 max:19.417436",
+      "sha256": [
+        "73a83ae766fc565899242ae48eac3a8ff729e9dd44fb23005f8f93152cb43bd8",
+        "eccf55d19b801e0f2c21fea37b60dfd0f09c40feeeb11a1f2afa314f78d20014"
+      ]
+    }
+  ]
+}

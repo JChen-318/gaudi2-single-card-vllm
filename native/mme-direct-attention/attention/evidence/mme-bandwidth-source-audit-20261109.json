@@ -1,0 +1,585 @@
+{
+  "scope": "CPU-only descriptor/source audit; no new device timing",
+  "user_reported_per_mme_to_sram_TBps": 3.2,
+  "descriptors": {
+    "qk": {
+      "shape": "g-m512n9472k128",
+      "raw_descriptor_count": 6,
+      "runtime_descriptor_count": 2,
+      "fields": [
+        {
+          "activation": 0,
+          "engine": 0,
+          "header": [
+            "0x896c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 8,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 0,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 0,
+          "engine": 1,
+          "header": [
+            "0x896c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 8,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 9472,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        }
+      ]
+    },
+    "qk32": {
+      "shape": "g32-m512n9472k128",
+      "raw_descriptor_count": 6,
+      "runtime_descriptor_count": 6,
+      "fields": [
+        {
+          "activation": 0,
+          "engine": 0,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 0,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 0,
+          "engine": 1,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 9472,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 1,
+          "engine": 0,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 0,
+          "agu_out": [
+            [
+              3328,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              3328,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              3456,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              3456,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 1,
+          "engine": 1,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 9472,
+          "agu_out": [
+            [
+              3328,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              3328,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              3456,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              3456,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 2,
+          "engine": 0,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 0,
+          "agu_out": [
+            [
+              6400,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              6400,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              6528,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              6528,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 2,
+          "engine": 1,
+          "header": [
+            "0xa96c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 10,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 9472,
+          "tensorC_roi_width": 256,
+          "tensorC_spatial_stride": 37888,
+          "tensorC_start": 9472,
+          "agu_out": [
+            [
+              6400,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              6400,
+              18944,
+              0,
+              0,
+              0
+            ],
+            [
+              6528,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              6528,
+              18944,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        }
+      ]
+    },
+    "pv": {
+      "shape": "g-m512n128k9472",
+      "raw_descriptor_count": 2,
+      "runtime_descriptor_count": 2,
+      "fields": [
+        {
+          "activation": 0,
+          "engine": 0,
+          "header": [
+            "0x996c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 9,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 128,
+          "tensorC_roi_width": 128,
+          "tensorC_spatial_stride": 512,
+          "tensorC_start": 0,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              256,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              256,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        },
+        {
+          "activation": 0,
+          "engine": 1,
+          "header": [
+            "0x996c8801",
+            "0x1020000"
+          ],
+          "input_type": 9,
+          "output_type": 9,
+          "rate_limiter": "0x40404",
+          "perf_evt_in": 0,
+          "perf_evt_out": 0,
+          "tensorC_valid_width": 128,
+          "tensorC_roi_width": 128,
+          "tensorC_spatial_stride": 512,
+          "tensorC_start": 128,
+          "agu_out": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              256,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              128,
+              256,
+              0,
+              0,
+              0
+            ]
+          ],
+          "store_en0": true,
+          "store_en1": false
+        }
+      ]
+    }
+  },
+  "fp16_fixture_vs_fp32_fixture_word_differences": [
+    {
+      "activation": 0,
+      "engine": 0,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    },
+    {
+      "activation": 0,
+      "engine": 1,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    },
+    {
+      "activation": 1,
+      "engine": 0,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    },
+    {
+      "activation": 1,
+      "engine": 1,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    },
+    {
+      "activation": 2,
+      "engine": 0,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    },
+    {
+      "activation": 2,
+      "engine": 1,
+      "diffs": [
+        {
+          "offset": "0x30",
+          "bf16": "0x996c8801",
+          "fp32": "0xa96c8801"
+        }
+      ]
+    }
+  ]
+}

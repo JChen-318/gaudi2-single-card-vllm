@@ -1,0 +1,17 @@
+{
+  "full_head_total_us": 3926.6289677470922,
+  "full_head_compute_and_overlap_us": 3862.073994241655,
+  "tpc_only_us_per_block": 9.154621741464851,
+  "mme_only_us_per_block": 11.600309287467482,
+  "max_rms": 0.0037600488867610693,
+  "samples": 30,
+  "output_sha256": "28851c766c1d18462eb66254dbb28139a6126656a6d7b60686bdcbb56f256faa",
+  "valid_output_sha256": "39e59b7366133bd2ca468a7a722fe48bfae8df557e25be80835bc2597908ee7f",
+  "stronger_barrier_head_total_us": 4126.585088670254,
+  "layer38_rms": 0.002841913141310215,
+  "layer49_rms": 0.002514193532988429,
+  "head55_rms": 0.0023668352514505386,
+  "mme_target_reached": false,
+  "tpc_target_reached": true,
+  "video_end_to_end_measured": false
+}

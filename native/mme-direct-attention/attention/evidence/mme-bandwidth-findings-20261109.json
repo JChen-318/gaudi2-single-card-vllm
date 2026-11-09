@@ -1,0 +1,72 @@
+{
+  "checked_at": "2026-11-09T18:17:54+08:00",
+  "user_reference": {
+    "direction": "MME -> SRAM",
+    "TBps_per_mme": 3.2,
+    "status": "User-provided reference; not independently verified with matching datatype/geometry/active-cycle definition"
+  },
+  "source_audit": "mme-bandwidth-source-audit-20261109.json",
+  "two_point_shape_slopes": {
+    "both": {
+      "small_us": 9.85101318359375,
+      "large_us": 15.56903076171875,
+      "delta_bytes": 9404416.0,
+      "delta_us": 5.718017578125,
+      "incremental_effective_TBps": 1.6446986864779471,
+      "scope": "Two-point shape slope includes shape-dependent computation and reads; not a write-active hardware counter"
+    },
+    "e0": {
+      "small_us": 9.42901611328125,
+      "large_us": 15.19305419921875,
+      "delta_bytes": 4702208.0,
+      "delta_us": 5.7640380859375,
+      "incremental_effective_TBps": 0.8157836450581334,
+      "scope": "Two-point shape slope includes shape-dependent computation and reads; not a write-active hardware counter"
+    },
+    "e1": {
+      "small_us": 9.6190185546875,
+      "large_us": 15.2869873046875,
+      "delta_bytes": 4702208.0,
+      "delta_us": 5.66796875,
+      "incremental_effective_TBps": 0.8296107842866988,
+      "scope": "Two-point shape slope includes shape-dependent computation and reads; not a write-active hardware counter"
+    }
+  },
+  "old_mme_profile": {
+    "us_per128q": 11.600309287467482,
+    "logical_output_bytes_per128q": {
+      "qk_score": 9666560,
+      "pv_partials": 131072
+    },
+    "aggregate_effective_TBps": 0.8446009289239362,
+    "per_engine_average_effective_TBps": 0.4223004644619681,
+    "scope": "QK+PV+host submission/wait+overlapped DMA+TPC normalization; invalid attention ablation, not a port bandwidth test"
+  },
+  "fp16_fp32": {
+    "shape": "512x9472 output; BF16 inputs and K128",
+    "fp16_us": 17.43194580078125,
+    "fp32_us": 23.86004638671875,
+    "scope": "Audited original captures differ only in output datatype; elapsed-time sensitivity supports output-side cost but does not prove an SRAM physical ceiling"
+  },
+  "store_en1": {
+    "baseline_us": 15.59503173828125,
+    "duplicated_us": 21.27496337890625,
+    "cout1_equals_cout0_full": true,
+    "conclusion": "Second output destination duplicates results; it does not partition the useful output"
+  },
+  "facts": [
+    "Current wide path places KT/V in HBM; Q/S/P/partial O in SRAM",
+    "QK and PV use the same pair of MME engines in Q0,Q1,PV0,Q2,PV1,... order",
+    "Runtime converter sets PERF_EVT_IN/OUT to zero; no per-MME write-active cycle counters recorded",
+    "RATE_LIMITER=0x040404; prior 8/8/8 did not improve QK, 2/2/2 was slower",
+    "QK descriptor output ROI width256; PV width128 with +128 output AGU branches outside valid columns; geometry utilization is a candidate, no cycle attribution yet"
+  ],
+  "conclusion": "Observed low effective bandwidth is not a measured physical MME->SRAM maximum. Evidence points to per-MME operation/output path and geometry plus mixed timing overhead; exact WB/AP/AGU/credit root cause remains unproven.",
+  "next_validation": [
+    "Compare repeated QK-only large-output runs on a single engine; fit multiple sizes and subtract measured submit floor, while checking complete owned output",
+    "Use compiler-generated descriptors to vary reduction K at constant output size, and output geometry/alignment at fixed arithmetic; preserve exact checks",
+    "Obtain validated profiler write-active cycles, useful bytes and stalls; compare to the user 3.2TB/s definition",
+    "Audit PV transposed equivalent and output branches before changing descriptor fields; account for layout conversion",
+    "Do not enable storeEn1 as a throughput fix; do not blindly modify global credits/QoS/unknown rate fields"
+  ]
+}

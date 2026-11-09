@@ -1,0 +1,26 @@
+{
+  "source_sha256": {
+    "context_bridge.cpp": "49862e83add45176d8e6fd28a6d20254eada1bf6e0347600669b72a6c7df436e",
+    "runtime_pipeline.hpp": "70651a8671dfcaa02f29f68d3092c9edfd5a76b60a61f180d8267094761478aa",
+    "runtime_batch.hpp": "893693e78d018e1dad0c7db49c1d8bb8606d4da59695feb5771240591768493d",
+    "runtime_tiled.hpp": "cf8e0d904bf80d85e73a99e5a7fbb7e39fecf92f975cdb80155ff3ac1d3f0901",
+    "runtime_quad.hpp": "7a99e98acbb01f43a8890efea68844cc9c76ce73cf72bff28df066213c9ddf35",
+    "batch_attention_probe.py": "f292fcf32a928d6c8be32800022d86d97cf15d445eae6a14a8a824f56652a5bc",
+    "mme_dump.py": "8c2185be8f40b98a074b542dea225405f3c30023c75c580838a0f38a11b38d9b",
+    "mme_raw_probe.py": "9132e0decf43d7a77fe93e1df5a22c87a0f3c52cc8d5a51887cb6fb3c65430aa",
+    "gen_lut.cpp": "3b02f136293332e07a5b18753bed5f5e44e3ce5eebad25643b422bcb2587c300",
+    "build.sh": "a0e01a2e71074459b8de0b7df796784379c33f8da5a155f803ae2e3df7d40419",
+    "tenus_runs.sh": "1c3ecc15efb43a5363bcc81658142d3cecc98c36f83e7b00870f90db43b798c8",
+    "sim_exp_fixed_shift.py": "1cf2ef49650f8a8ddc6751180b48c72c904c0be5f23e5c7a813f19895089bea3",
+    "kernels/exp_f16_logq.c": "dc14baf240c101e102aed746be93afa1c57e0f7d44fef711675574fcf9046486",
+    "kernels/normalize_quad_fixed.c": "1e854f291062716438b69ab319682f7d910ca9566f3accc6ab3208df24a825d1"
+  },
+  "compiler": "TPC C/C++ compiler version 2.7.33\nTarget: tpc\nThread model: posix\nInstalledDir: /usr/bin\n",
+  "build_sha256": {
+    "build/normalize_quad_fixed.bin": "65f39222ee9bedd8ca591ba838634f5ef10a49411890a51d6781ccce9a6fa79b",
+    "build/lut_gen6_logq2_shift8.bin": "6ba91878b8aa9016f2873897eac12e242300d4096c25e261dd785a29f8268df1",
+    "build/normalize_quad_fixed1024.bin": "a2b067e0ae521c07d684a595473bb40bdbf78fed519dc98d113467e01dd11ffe",
+    "build/exp_f16_tile_fixed0_g15pad.bin": "c23a58b821448f0073d85fe2672fac04e63f4527514b85cca666c1a979f4c7ed",
+    "build/libcontext_bridge.so": "b85e4fb3839b0c2349c9ea2d7ad0a11547985b02df0b82beea200386ae90fdb7"
+  }
+}

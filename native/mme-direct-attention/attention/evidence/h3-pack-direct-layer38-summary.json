@@ -1,0 +1,11 @@
+{
+  "log": "h3-pack-direct-layer38",
+  "heads": 56,
+  "direct_ms": 240.73263292666525,
+  "production_ms": 323.2237279880792,
+  "ref_heads": 56,
+  "direct_rms_max": 0.00992158055305481,
+  "production_rms_max": 0.02999120205640793,
+  "sha256": "fccf5c38c362ae0284555b24577e88072f685f77840a6c1182e72160c29db109",
+  "stable": true
+}

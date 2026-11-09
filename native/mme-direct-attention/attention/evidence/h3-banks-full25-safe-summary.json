@@ -1,0 +1,11 @@
+{
+  "log": "h3-banks-full25-safe",
+  "heads": 56,
+  "direct_ms": 240.4655014979653,
+  "production_ms": 323.22256948100403,
+  "ref_heads": 56,
+  "direct_rms_max": 0.003222980536520481,
+  "production_rms_max": 0.011383257806301117,
+  "sha256": "4b4c2f0d591d325fcd08f53f37c238af01b06f0e5810a6f266f6fa8c8480cc02",
+  "stable": true
+}

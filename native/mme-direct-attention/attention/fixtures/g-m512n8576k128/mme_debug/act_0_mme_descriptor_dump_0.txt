@@ -1,0 +1,120 @@
+
+Activation 0 Descriptor 0: 
+BaseAddrCout1: 0x0  BaseAddrCout0: 0x0  BaseAddrA: 0x0  BaseAddrB: 0x0  
+Brains:
+    AguA: loopMask: 0x1 masterEn: 1 slaveEn 1
+    AguB: loopMask: 0x0 masterEn: 1 slaveEn 1
+    AguOut0: loopMask: 0x0 masterEn: 1 slaveEn 1
+    AguOut1: loopMask: 0x0 masterEn: 1 slaveEn 1
+    eu: loopMask: 0x0 masterEn: 1 slaveEn 1
+    ap: loopMask: 0x0 masterEn: 1 slaveEn 1
+    decEn: 0 shuffleA: 1 bgemm 0 clipFpEu 0 clipFpAp 0
+    sbACacheEn 1 sbBCacheEn 1 roundingMode 0 reluEn 0 noRollUp 0 nullDesc 0
+    dw[0] : 0xc0c0c0c1 dw[1] : 0xc2c0c0
+Header:
+    transA: 1 transB: 0 advanceA: 0 advanceB: 0 advanceC: 0
+    lowerA: 0 lowerB: 0 accumEn: 0 rollAccum: 0x0
+    aguReadsA: 0x11 aguReadsB: 0xc doubleAccums: 1 storeEn0: 1 storeEn1: 0
+    dataTypeIn: 9 dataTypeOut: 9
+    swapBaseAndOffsetA: 0 swapBaseAndOffsetB: 0 swapBaseAndOffsetOut: 0
+    storeColorSet0: 0 storeColorSet1: 0 hx2: 0
+    partialHeightLoopA: 0x2 partialHeightLoopB: 0x1 teBypassA 0 teBypassB: 0
+    dw[0]: 0x996c8801  dw[1]: 0x1020000
+Ctrl: 
+    eus[0]: 
+    sb0En: 1 sb1En: 0 sb2En: 1 sb3En: 1 sb4En: 1
+    in0En: 1 in1En: 1 sb0Out: 0 sb1Out: 1 sb2Out: 1
+    sb0Sel: 0x0 sb1Sel: 0x0 sb2Sel: 0x4 sb3Sel: 0x5 sb4Sel: 0x1
+    eus[1]: 
+    sb0En: 1 sb1En: 0 sb2En: 1 sb3En: 1 sb4En: 1
+    in0En: 1 in1En: 1 sb0Out: 0 sb1Out: 1 sb2Out: 1
+    sb0Sel: 0x0 sb1Sel: 0x0 sb2Sel: 0x6 sb3Sel: 0x7 sb4Sel: 0x1
+    dw[0]: 0x6f8d807d   dw[1]: 0x6b0fc07d
+Tensor: tensorA
+    validElements: [128, 65536, 65536, 65536, 65536]
+    loopStride: [0, 65536, 65536, 65536, 65536]
+    roiSize: [128, 65536, 65536, 65536]
+    spatialStrides: [1024, 65536, 65536, 65536]
+    startOffset: [0, 0, 0, 0]
+    dw[0]: 0x80 dw[1]: 0x10000 dw[2]: 0x10000 dw[3]: 0x10000 dw[4]: 0x10000
+    dw[5]: 0x0 dw[6]: 0x10000 dw[7]: 0x10000 dw[8]: 0x10000  dw[9]: 0x10000
+    dw[10]: 0x80 dw[11]: 0x10000 dw[12]: 0x10000 dw[13]: 0x10000
+    dw[14]: 0x400 dw[15]: 0x10000 dw[16]: 0x10000 dw[17]: 0x10000
+    dw[18]: 0x0 dw[19]: 0x0 dw[20]: 0x0 dw[21]: 0x0
+Tensor: tensorB
+    validElements: [8576, 1097728, 1097728, 1097728, 1097728]
+    loopStride: [256, 0, 1097728, 1097728, 1097728]
+    roiSize: [64, 1097728, 1097728, 1097728]
+    spatialStrides: [8576, 1097728, 1097728, 1097728]
+    startOffset: [0, 0, 0, 0]
+    dw[0]: 0x2180 dw[1]: 0x10c000 dw[2]: 0x10c000 dw[3]: 0x10c000 dw[4]: 0x10c000
+    dw[5]: 0x100 dw[6]: 0x0 dw[7]: 0x10c000 dw[8]: 0x10c000  dw[9]: 0x10c000
+    dw[10]: 0x40 dw[11]: 0x10c000 dw[12]: 0x10c000 dw[13]: 0x10c000
+    dw[14]: 0x2180 dw[15]: 0x10c000 dw[16]: 0x10c000 dw[17]: 0x10c000
+    dw[18]: 0x0 dw[19]: 0x0 dw[20]: 0x0 dw[21]: 0x0
+Tensor: tensorCout
+    validElements: [8576, 4390912, 4390912, 4390912, 4390912]
+    loopStride: [256, 4390912, 4390912, 4390912, 4390912]
+    roiSize: [256, 4390912, 4390912, 4390912]
+    spatialStrides: [34304, 4390912, 4390912, 4390912]
+    startOffset: [0, 0, 0, 0]
+    dw[0]: 0x2180 dw[1]: 0x430000 dw[2]: 0x430000 dw[3]: 0x430000 dw[4]: 0x430000
+    dw[5]: 0x100 dw[6]: 0x430000 dw[7]: 0x430000 dw[8]: 0x430000  dw[9]: 0x430000
+    dw[10]: 0x100 dw[11]: 0x430000 dw[12]: 0x430000 dw[13]: 0x430000
+    dw[14]: 0x8600 dw[15]: 0x430000 dw[16]: 0x430000 dw[17]: 0x430000
+    dw[18]: 0x0 dw[19]: 0x0 dw[20]: 0x0 dw[21]: 0x0
+SyncObject:
+    signalMask0 0x3f signalEn0: 1 signalMask1: 0x3f signalEn1: 0
+    masterWaitForSlaveFence: 1 slaveSendFence2Master: 1 slaveSignalEn: 0
+    slave0UseSlaveSOAddr: 0 slave1UseSlaveSOAddr: 0 slave0UseMasterSoAddrPlus4: 0 slave1UseMasterSOAddrPlus4: 0
+    so0Addr: 0x0 soVal.so0Value: 0x1 so0Val.soPerfEn: 0 so0Val.soOp: 1
+    so1Addr: 0x0 soVal.so1Value: 0x1 so1Val.soPerfEn: 0 so1Val.soOp: 1
+    dw[0]: 0x1bf7f dw[1]: 0x0 dw[2]: 0x80000001 dw[3]: 0x0 dw[4]: 0x80000001
+AguIn: 
+    roiBaseOffset: aguIn[0][MASTER]: [0, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[0][SLAVE]: [0, 256, 0, 0, 0]
+    roiBaseOffset: aguIn[1][MASTER]: [0, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[1][SLAVE]: [0, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[2][MASTER]: [0, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[2][SLAVE]: [128, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[3][MASTER]: [64, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[3][SLAVE]: [192, 0, 0, 0, 0]
+    roiBaseOffset: aguIn[4][MASTER]: [0, 512, 0, 0, 0]
+    roiBaseOffset: aguIn[4][SLAVE]: [0, 768, 0, 0, 0]
+AguOut: 
+    roiBaseOffset: aguOut[0][MASTER]: [0, 0, 0, 0, 0]
+    roiBaseOffset: aguOut[0][SLAVE]: [0, 17152, 0, 0, 0]
+    roiBaseOffset: aguOut[1][MASTER]: [128, 0, 0, 0, 0]
+    roiBaseOffset: aguOut[1][SLAVE]: [128, 17152, 0, 0, 0]
+spatialSizeMinus1A : 0x3f  spatialSizeMinus1B : 0x7f  spatialSizeMinus1Cout : 0x7f  
+Conv: 
+    kernelSizeMinus1.dim[0]: 0xb kernelSizeMinus1.dim[1]: 0x0 kernelSizeMinus1.dim[2]: 0x0 kernelSizeMinus1.dim[3]: 0x0
+    associatedDims[0]: dimA: 5 dimB: 0 dimOut: 0
+    associatedDims[1]: dimA: 1 dimB: 5 dimOut: 1
+    associatedDims[2]: dimA: 5 dimB: 5 dimOut: 2
+    associatedDims[3]: dimA: 5 dimB: 5 dimOut: 3
+    dw[0]: 0xb 
+    w[1]: 0x5 w[2]: 0x69 w[3]: 0xad w[4]: 0xed
+OuterLoop: 
+    associatedDims[0]: dimA: 5 dimB: 5 dimOut: 4
+    sizeMinus1: 0x0
+    dw: 0x12d
+numIterationsMinus1 : 0x0  
+SBRepeat:
+    repeatAMinus1: 0xb repeatBMinus1: 0x0
+    repeatAMask: 0x0 repeatBMask: 0x0
+    dw: 0xb
+Fp8Bias: 
+    a: 0x0 b: 0x0 out: 0x0
+AxiUserData: 
+    first: 0x0 steady: 0x0 mask: 0x0
+    dw: 0x0
+slaveSyncObject0Addr: 0x0  slaveSyncObject0Addr: 0x0  
+PerfEvent: perfEvtIn
+    value: 0x0 rst: 1 incMask: 0b0 startEndMask: 0b1
+    loopMask: 0x3f operand: 0b1 slaveSendsPerfEvents: 1
+    dw: 0x87f50000
+PerfEvent: perfEvtOut
+    value: 0x0 rst: 0 incMask: 0b0 startEndMask: 0b0
+    loopMask: 0x0 operand: 0b0 slaveSendsPerfEvents: 0
+    dw: 0x0

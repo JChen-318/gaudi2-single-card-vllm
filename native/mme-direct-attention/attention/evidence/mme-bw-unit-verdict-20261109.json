@@ -1,0 +1,73 @@
+{
+  "checked_at": "2026-11-09T19:50:46+08:00",
+  "scope": "Installed SynapseAI 1.24.1-482; binary implementation and CPU queries, not recovered public HAL C++ source; no REA; no accelerator jobs",
+  "libraries_sha256": {
+    "libSynapseMme.so": "467e0b56eb3b036ca89e5bbedcd2f7679b7017894456edf393015dcbea3d7bcd",
+    "libSynapse.so": "f4849a348a466be96e808b653b2e9ccf9cb9df232663ff38325717b7797c7e62"
+  },
+  "raw_gaudi2_getter": {
+    "symbol": "Gaudi2::MmeHalReader::getSinglePortBw()",
+    "address": "0x110bd0",
+    "return": 200,
+    "vtable_slot": "0x60",
+    "unit_in_getter_itself": false
+  },
+  "consumer_chain": [
+    {
+      "symbol": "gaudi3::MmeBrain::calcAccessBandwidth",
+      "calls": [
+        "0x12ccfa",
+        "0x12cd23"
+      ],
+      "effect": "HAL getSinglePortBw * getChipPortsNr(A/B) -> float PerfAttr offsets 0x24/0x34; no clock conversion"
+    },
+    {
+      "symbol": "gc::layered_brain::SlicingDetails::getMmeBw",
+      "address": "0x2a80dc0",
+      "effect": "Normal branch sums QOR float offsets 0x24, 0x34, 0x44, 0x54 without clock conversion"
+    },
+    {
+      "symbol": "gc::layered_brain::BundleEvaluator::handleMmeBw",
+      "getMmeBw_call": "0x2e3820f",
+      "metric_float_format_load": "0x2e3847e",
+      "format_literal_offset": "0x31e72d0",
+      "format_literal_reference": "0x2e383e9 -> literal+2",
+      "format": "{} MME bandwidth: {} GB/s, result: {}, node: {}[{}]"
+    }
+  ],
+  "unit_verdict": "The traced software bandwidth interface uses GB/s (gigabytes per second), not bytes per cycle. This evidence comes from the Gaudi3 producer and common compiler consumer, not an explicit unit on the Gaudi2 getter.",
+  "gaudi2_application_caveat": {
+    "Gaudi2_MmeBrain_vtable": "0x334280",
+    "callback_relocation": "0x3342e0",
+    "target": "MmeCommon::MmeBrainBase::calcMemoryAttributes at 0x1b49d0: endbr64; ret",
+    "Gaudi3_override": "0x12e180",
+    "meaning": "The normal Gaudi2 memory-attribute callback is empty in this build. Do not claim the Gaudi3 bandwidth formula is an active Gaudi2 performance limit. Other consumers were not exhaustively excluded."
+  },
+  "conditional_arithmetic_only": {
+    "ports_per_logical_mme_C": 4,
+    "if_200_GBps_per_port_single_mme_TBps": 0.8,
+    "if_200_bytes_per_cycle_at_1650MHz_single_mme_TBps": 1.32,
+    "if_200_bytes_per_cycle_chip_TBps": 2.64
+  },
+  "withdrawn_claims": [
+    "Measured 1.64-1.67TB/s cannot rule out a 2.64TB/s theoretical peak: lower sustained throughput does not contradict a higher peak.",
+    "0.8TB/s per MME is not an established Gaudi2 silicon maximum or proven enforced cost-model limit.",
+    "PV logical A traffic near 1.6TB/s is consistent with an input bottleneck hypothesis but does not establish an independent physical A budget from this getter."
+  ],
+  "still_valid": [
+    "Gaudi2 BF16 CPU geometry queries return per-MME A/B/C counts 4/4/4 and chip 8/8/8 in the 16 tested configurations.",
+    "Existing compiler output measurements 1.638/1.668TB/s chip are effective measured rates, not physical write-active counters.",
+    "External single-MME MME-to-SRAM 3.2TB/s remains unverified and has not been disproved by these measurements."
+  ],
+  "evidence_logs": [
+    "mme-bw-unit-callers-20261109.log",
+    "mme-bw-unit-callers2-20261109.log",
+    "mme-bw-unit-callers3-20261109.log",
+    "mme-bw-unit-consumer2-20261109.log",
+    "mme-bw-unit-final-trace-20261109.log",
+    "mme-bw-unit-formula-20261109.log",
+    "mme-bw-unit-link-20261109.log",
+    "mme-bw-unit-strings-20261109.log",
+    "mme-bw-unit-synapse-consumer-20261109.log"
+  ]
+}

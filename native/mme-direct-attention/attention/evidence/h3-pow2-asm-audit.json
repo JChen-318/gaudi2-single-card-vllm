@@ -1,0 +1,9 @@
+{
+  "assembly_equal_after_multiply_immediate_replacement": true,
+  "changed_immediates": 17,
+  "old_bytes": 7360,
+  "new_bytes": 7360,
+  "padding_score": -58.3125,
+  "padding_quant": -15232,
+  "padding_bf16_bits": 0
+}

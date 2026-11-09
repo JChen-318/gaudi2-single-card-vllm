@@ -1,0 +1,25 @@
+{
+  "layer": 38,
+  "head": 36,
+  "rows": 37750,
+  "seconds": 38.07183005695697,
+  "cpu_model": true,
+  "stats": {
+    "old": {
+      "error_sum": 22054.54750084877,
+      "reference_sum": 221816076.5625,
+      "max_tile_rms": 0.012588750741207884,
+      "worst_tile": 275,
+      "tiles_over_one_percent": 103,
+      "full_head_rms": 0.009971317986477629
+    },
+    "pow2": {
+      "error_sum": 13067.227152824402,
+      "reference_sum": 221816076.5625,
+      "max_tile_rms": 0.009551427467660606,
+      "worst_tile": 232,
+      "tiles_over_one_percent": 0,
+      "full_head_rms": 0.0076752973700120065
+    }
+  }
+}
