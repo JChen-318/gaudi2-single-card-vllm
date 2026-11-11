@@ -70,11 +70,16 @@ until curl -fs -m 3 -o /dev/null "http://127.0.0.1:$port/health"; do
  sleep 10
 done
 printf 'healthy after %ss\n' "$(( $(date +%s) - start ))" | tee "$P/status"
+default_prompt="${H3_VIDEO_PROMPT:-A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.}"
+prompts=()
+# H3_VIDEO_PROMPTS_FILE: one prompt per line; request i uses line i modulo the line count.
+if [ -n "${H3_VIDEO_PROMPTS_FILE:-}" ]; then mapfile -t prompts < "$H3_VIDEO_PROMPTS_FILE"; cp "$H3_VIDEO_PROMPTS_FILE" "$P/prompts.txt"; fi
 for (( i=0; i<nreq; i++ )); do
  printf 'request %s running\n' "$i" > "$P/status"
+ prompt="$default_prompt"; [ ${#prompts[@]} -eq 0 ] || prompt="${prompts[$(( i % ${#prompts[@]} ))]}"
  docker exec "$cid" /home/a/h3-omni-venv/bin/python /home/a/gsv-docker/vllm-gaudi/tools/minimax_h3/request_video.py \
   --api-url "http://127.0.0.1:$port/v1/videos/sync" --task t2va \
-  --prompt "${H3_VIDEO_PROMPT:-A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.}" \
+  --prompt "$prompt" \
   --output "$P/out$i.mp4" --metadata "$P/out$i.json" --width 1344 --height 768 --duration 5.167 --fps 24 \
   --lightx2v-4step-lora /mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors \
   --seed "$((2101 + i % 2))" > "$P/request$i.log" 2>&1

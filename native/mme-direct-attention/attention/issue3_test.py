@@ -118,6 +118,29 @@ results["t3_counterexamples_direct"] = dict(
     other_heads_bit_identical=bool(torch.equal(oc[0, 2:], base_out[0, 2:])))
 print("ISSUE3 t3 " + json.dumps(results["t3_counterexamples_direct"]), flush=True)
 
+# 5. Automatic key-capacity buckets (H3DIRECT_KEYS=auto): cross every bucket in both directions. A length must
+#    give the same result whatever ran before (37750 -> the t1 SHA again after a rebuild).
+if hd.KEYS_SETTING == "auto":
+    for n in [int(x) for x in os.environ.get("ISSUE3_SWITCH", "37859,38317,39000,39500,40000,40500,41000,41344,41472,37750").split(",")]:
+        if n >= L:
+            q2, k2, v2 = (torch.cat([x, x[:, :, :n - L]], dim=2) for x in (Q, K, V))
+        else:
+            q2, k2, v2 = (x[:, :, :n].contiguous() for x in (Q, K, V))
+        qh, kh, vh = (x.to("hpu") for x in (q2, k2, v2))
+        before = (hd.STATS["plan_switches"], hd.STATS["plan_prepare_s"])
+        t = time.perf_counter()
+        o, st = direct(qh, kh, vh)
+        row = dict(L=n, bucket=hd.select_bucket(n), plan_keys=hd._PLAN.keys if hd._PLAN else None, wall_s=round(time.perf_counter() - t, 3),
+                   switches=hd.STATS["plan_switches"] - before[0],
+                   prepare_s=round(hd.STATS["plan_prepare_s"] - before[1], 2), **st)
+        if n == L:
+            row["sha"] = sha(o); row["sha_equals_t1"] = row["sha"] == base_sha
+        else:
+            row["fp32_ref_worst_rel"] = fp32_ref_error(q2, k2, v2, o)
+        results.setdefault("t5_buckets", []).append(row)
+        print("ISSUE3 t5 " + json.dumps(row), flush=True)
+        del qh, kh, vh, o
+
 # 4. max_free_attention guard vs the deployed function.
 two = (qc[:, :2].to("hpu"), kc[:, :2].to("hpu"), vc[:, :2].to("hpu"))
 o_old = old["max_free_attention"](*two, scale).cpu().float()

@@ -154,9 +154,9 @@ extern "C" int context_quad_set_mme(unsigned slot, unsigned n, const uint32_t *w
 
 extern "C" int context_quad_layout(uint64_t base, unsigned keys, unsigned n, uint64_t *out)
 {
-    // 38272 keys (first quarter 9600 = 5 x 1920, the G15 exp kernel's group) is the largest validated capacity;
-    // the caller still checks the SRAM end address.
-    if (!out || base % 256 || keys < 512 || keys > 38272 || keys % 128 || n < 4 || n > (quad_query_rows==1024?24u:16u) || n % (quad_query_rows/128)) return -EINVAL;
+    // Key capacity up to 41472 (first quarter 10368 columns): the largest that fits SRAM with both slots at 1024
+    // queries. The caller still checks the SRAM end address.
+    if (!out || base % 256 || keys < 512 || keys > 41472 || keys % 128 || n < 4 || n > (quad_query_rows==1024?24u:16u) || n % (quad_query_rows/128)) return -EINVAL;
     uint64_t a = base;
     auto take = [&](uint64_t bytes) { uint64_t r = a; a = (a + bytes + 255) & ~255ull; return r; };
     uint64_t matrix = 128 * 128 * 2, wide = 128 * keys * 2;
@@ -570,4 +570,30 @@ extern "C" int context_quad_select_head(unsigned head)
         p.qk.swap(next.qk[slot]);p.pv.swap(next.pv[slot]);
     }
     quad_active_head=head;return 0;
+}
+
+// Release both prepared slots and all head banks (key-capacity bucket switch). Every ECB returns to its pool;
+// the MME descriptor sets and the wide K/V binding are cleared so a new plan must set them again. Option
+// setters stay as they are. Kernel binaries stay cached (load_runtime_isa). Nothing may be queued.
+extern "C" int context_quad_release()
+{
+    if (quad_pending || quad_inflight) return -EBUSY;
+    unsigned freed = 0;
+    auto drop = [&](std::vector<PreparedEcb> &jobs) {
+        for (auto &job : jobs) { freed += job.code != nullptr; release_ecb(job); }
+        jobs.clear();
+    };
+    for (auto &p : quad_plans) {
+        drop(p.qk); drop(p.pv); drop(p.mme_batches);
+        freed += (p.ex.code != nullptr) + (p.nm.code != nullptr);
+        release_ecb(p.ex); release_ecb(p.nm);
+        p = QuadPlan{};
+    }
+    for (auto &bank : quad_head_banks) for (unsigned slot = 0; slot < 2; ++slot) { drop(bank.qk[slot]); drop(bank.pv[slot]); }
+    quad_head_banks.clear(); quad_active_head = 0;
+    for (auto &set : quad_mme) { set.words.clear(); set.engines.clear(); }
+    quad_hbm_kt = quad_hbm_v = 0; quad_query_rows = 512;
+    quad_head = 0;
+    printf("QUAD_RELEASE ecbs=%u\n", freed); fflush(stdout);
+    return 0;
 }

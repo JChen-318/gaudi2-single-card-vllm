@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <map>
+#include <string>
 #include <fstream>
 #include <iterator>
 #include <cstddef>
@@ -257,12 +259,19 @@ extern "C" int context_scal_mme_ecb(uint64_t a, uint64_t b, uint64_t c)
     return context_scal_mme_ex(a, b, c, 128, 128, 128);
 }
 
+// Loaded kernel binaries by path and content: a plan that is released and prepared again (another key-capacity
+// bucket) reuses the same 64 KiB hbm_binary buffers instead of allocating new ones.
+static std::map<std::string, std::pair<std::vector<char>, uint64_t>> g_isa_cache;
+
 static uint64_t load_runtime_isa(const char *path)
 {
     if (!own_scal) return 0;
     std::ifstream file(path, std::ios::binary);
     std::vector<char> isa((std::istreambuf_iterator<char>(file)), {});
     if (isa.empty() || isa.size() > 65536) return 0;
+    auto cached = g_isa_cache.find(path);
+    if (cached != g_isa_cache.end() && cached->second.first == isa) return cached->second.second;
+    uint64_t address = 0;
     scal_pool_handle_t pool = nullptr; scal_buffer_handle_t buffer = nullptr;
     if (scal_get_pool_handle_by_name(own_scal, "hbm_binary", &pool) ||
         scal_allocate_aligned_buffer(pool, 65536, 256, &buffer)) return 0;
@@ -274,7 +283,10 @@ static uint64_t load_runtime_isa(const char *path)
     synStatus copied = synMemCopyAsync(upload, (uintptr_t)host, 65536, binary.device_address, HOST_TO_DRAM);
     if (copied == synSuccess) copied = synStreamSynchronize(upload);
     synStreamDestroy(upload); synHostFree(0, host, 0);
-    return copied == synSuccess ? binary.device_address : 0;
+    if (copied != synSuccess) return 0;
+    address = binary.device_address;
+    g_isa_cache[path] = {isa, address};
+    return address;
 }
 
 // Per-kernel AXI rate-limiter reset tokens (kernel_config). 8/6 is what the

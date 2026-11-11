@@ -34,18 +34,41 @@ from pathlib import Path
 import torch
 
 ROOT = Path(os.environ.get("H3DIRECT_ROOT", "/home/a/gsv-data/media/mme-direct-20261108/repro/attention"))
-# Key capacity bucket: 37760 (H3 text prompts up to 50 tokens: 37296 video + 414 audio + text) or 38272 (up to
-# 562 tokens; about 1.4% more attention work). One plan per process, so a server with mixed prompt lengths
-# should use 38272. VALID is only the plan's initial valid length; any 3 * FIRST < L <= KEYS runs direct.
-KEYS = int(os.environ.get("H3DIRECT_KEYS", "37760"))
-if KEYS not in (37760, 38272):
-    raise ValueError(f"H3DIRECT_KEYS must be 37760 or 38272, got {KEYS}")
-VALID, DIM = 37750, 128
+# Key-capacity buckets. H3 attention length = 37296 video + 414 audio + text tokens (1344x768, 124 frames).
+#   37760: text <= 50 tokens (bit-identical to the original single-length plan)
+#   then one bucket every 512 keys (38272 ... 41344: text <= 562, 1074, 1586, 2098, 2610, 3122, 3634 tokens),
+#   so a length wastes at most about 512 keys (about 1.4%); 41344 has the largest SRAM fit (first quarter 10368).
+# Every bucket keeps its last quarter narrower than the first, so the TPC programs' structure does not depend
+# on the valid length and context_quad_set_valid can rewrite them in place (41472 with equal quarters failed
+# at L = 41472: the exp setup deduplicates equal column counts, so the program size changed).
+# H3DIRECT_KEYS=auto (default) uses the smallest bucket that holds a call's length and rebuilds the plan when
+# that changes (the result for a given length never depends on earlier calls); a number pins one bucket.
+BUCKETS = (37760, 38272, 38784, 39296, 39808, 40320, 40832, 41344)
+KEYS_SETTING = os.environ.get("H3DIRECT_KEYS", "auto")
+if KEYS_SETTING != "auto" and int(KEYS_SETTING) not in BUCKETS:
+    raise ValueError(f"H3DIRECT_KEYS must be auto or one of {BUCKETS}, got {KEYS_SETTING}")
+VALID, DIM = 37750, 128         # VALID: a plan's initial valid length (any in-range length works afterwards)
 GROUP = 16                      # 128-query blocks per native group
-BLOCKS = 304                    # up to 38912 queries: 19 groups of 16 blocks
 PARTS, QUANTUM = 4, 128
-FIRST = (KEYS + PARTS * QUANTUM - 1) // (PARTS * QUANTUM) * QUANTUM   # 9472
-MIN_VALID = 3 * FIRST + 1       # the last key quarter must hold at least one valid key
+
+
+def geometry(keys: int) -> tuple[int, int, int]:
+    """(first key-quarter width, query blocks (whole groups), smallest valid length) for a key capacity."""
+    first = (keys + PARTS * QUANTUM - 1) // (PARTS * QUANTUM) * QUANTUM
+    blocks = (keys + GROUP * 128 - 1) // (GROUP * 128) * GROUP
+    return first, blocks, 3 * first + 1          # the last key quarter must hold at least one valid key
+
+
+def select_bucket(length: int) -> int | None:
+    allowed = BUCKETS if KEYS_SETTING == "auto" else (int(KEYS_SETTING),)
+    for keys in allowed:
+        if geometry(keys)[2] <= length <= keys:
+            return keys
+    return None
+
+
+KEYS = BUCKETS[0] if KEYS_SETTING == "auto" else int(KEYS_SETTING)   # compatibility (old tests)
+FIRST, BLOCKS, MIN_VALID = geometry(KEYS)
 STAT_BYTES = 4096
 POW2_Q = os.environ.get("H3DIRECT_POW2Q", "0") == "1"
 INPUT_Q_SCALE = .0625 if POW2_Q else None
@@ -58,8 +81,12 @@ NORM = "normalize_quad_fixed1024.bin"
 
 
 class _Plan:
-    def __init__(self, relaxed: bool, heads: int):
+    def __init__(self, relaxed: bool, heads: int, keys: int, valid0: int | None = None):
         self.heads=heads
+        self.keys = keys
+        self.first, self.blocks, self.min_valid = geometry(keys)
+        if valid0 is None:
+            valid0 = VALID if self.min_valid <= VALID <= keys else keys
         # Borrowed raw QMAN programs assume the runtime has initialized each
         # engine's addressing context. QKV dump tests may have used only DMA/
         # TPC so far, unlike the real model's QKV projections and old probes.
@@ -102,26 +129,28 @@ class _Plan:
             return (len(descs), (C.c_uint32 * (182 * len(descs)))(*[w for _, _, ws in descs for w in ws]),
                     (u * len(descs))(*[e for _, e, _ in descs]))
         setter = api("context_quad_set_mme", [u, u, C.POINTER(C.c_uint32), C.POINTER(u)])
-        for h, width in enumerate((FIRST, KEYS - 3 * FIRST)):
+        for h, width in enumerate((self.first, keys - 3 * self.first)):
             assert setter(h, *dargs(load(f"g-m512n{width}k128", True))) == 0
             assert setter(h + 2, *dargs(load(f"g-m512n128k{width}", False))) == 0
 
         dev = "hpu"
-        self.qh = torch.zeros((heads, BLOCKS * 128, DIM), dtype=torch.bfloat16, device=dev)
-        self.kth = torch.zeros((heads, DIM * KEYS), dtype=torch.bfloat16, device=dev)
-        self.vh = torch.zeros((heads, KEYS, DIM), dtype=torch.bfloat16, device=dev)
-        self.out = torch.zeros((BLOCKS, 128, DIM), dtype=torch.bfloat16, device=dev)
-        self.stats = torch.zeros((BLOCKS, STAT_BYTES // 8, 2), dtype=torch.float32, device=dev)
+        self.qh = torch.zeros((heads, self.blocks * 128, DIM), dtype=torch.bfloat16, device=dev)
+        self.kth = torch.zeros((heads, DIM * keys), dtype=torch.bfloat16, device=dev)
+        self.vh = torch.zeros((heads, keys, DIM), dtype=torch.bfloat16, device=dev)
+        self.out = torch.zeros((self.blocks, 128, DIM), dtype=torch.bfloat16, device=dev)
+        self.stats = torch.zeros((self.blocks, STAT_BYTES // 8, 2), dtype=torch.float32, device=dev)
         torch.hpu.synchronize()
 
         info = (u64 * 5)()
         assert api("context_info", [u, up])(0, info) == 0
-        assert api("context_scal_nop", [C.c_int])(int(info[0])) == 0
+        global _RUNTIME_READY
+        if not _RUNTIME_READY:   # process-level: the private stream and the LUT upload happen once
+            assert api("context_scal_nop", [C.c_int])(int(info[0])) == 0
         base = info[1] + 0x200000
         dp = _data_ptr
         assert api("context_quad_set_wide_kv", [u64, u64])(dp(self.kth), dp(self.vh)) == 0
         L = (u64 * 10)()
-        assert api("context_quad_layout", [u64, u, u, up])(base, KEYS, GROUP, L) == 0 and L[9] <= info[1] + info[2]
+        assert api("context_quad_layout", [u64, u, u, up])(base, keys, GROUP, L) == 0 and L[9] <= info[1] + info[2]
         assert api("context_quad_set_options", [C.c_int])(1) == 0
         assert api("context_quad_set_ablation", [C.c_int])(0) == 0
         assert api("context_set_mme_nobarrier_allowed", [C.c_int])(1) == 0
@@ -138,17 +167,20 @@ class _Plan:
         assert api("context_quad_set_local_qk_barrier", [C.c_int])(1) == 0
         if relaxed:
             assert api("context_quad_set_relaxed_qk_reuse", [C.c_int])(1) == 0
-        assert api("context_attention_set_lut", [C.c_char_p])(str(ROOT / "build" / LUT).encode()) == 0
+        if not _RUNTIME_READY:
+            assert api("context_attention_set_lut", [C.c_char_p])(str(ROOT / "build" / LUT).encode()) == 0
+            _RUNTIME_READY = True
         exp_bin = str(ROOT / "build" / (EXP_KERNEL + ".bin")).encode()
         norm_bin = str(ROOT / "build" / NORM).encode()
         assert api("context_quad_prepare", [u64, u, u, u, u, C.c_char_p, C.c_char_p])(
-            base, KEYS, VALID, GROUP, 24, exp_bin, norm_bin) == 0
+            base, keys, valid0, GROUP, 24, exp_bin, norm_bin) == 0
         A = (u64 * 5)()
-        assert api("context_quad_layout_alt", [u64, u, u, up])(base, KEYS, GROUP, A) == 0 and A[4] <= info[1] + info[2]
+        assert api("context_quad_layout_alt", [u64, u, u, up])(base, keys, GROUP, A) == 0 and A[4] <= info[1] + info[2]
         assert api("context_quad_prepare_slot", [u, u64, u, u, u, u, C.c_char_p, C.c_char_p])(
-            1, base, KEYS, VALID, GROUP, 24, exp_bin, norm_bin) == 0
-        self.valid = VALID
-        self.staged = VALID            # rows [0, staged) of qh/vh (and K columns) may hold data
+            1, base, keys, valid0, GROUP, 24, exp_bin, norm_bin) == 0
+        self.valid = valid0
+        self.staged = valid0           # rows [0, staged) of qh/vh (and K columns) may hold data
+        self._release = api("context_quad_release", [])
         self._set_valid = api("context_quad_set_valid", [u])
         bank_status=api("context_quad_prepare_head_banks", [u])(heads)
         if bank_status:raise RuntimeError(f"head bank preparation failed: {bank_status}")
@@ -164,15 +196,15 @@ class _Plan:
             n = len(entries)
             return (n, (u64 * n)(*[e[0] for e in entries]), (u64 * n)(*[e[1] for e in entries]),
                     (u64 * n)(*[e[2] for e in entries]))
-        self.head_bytes=BLOCKS*128*DIM*2
+        self.head_bytes=self.blocks*128*DIM*2
         # Continuous streaming (H3DIRECT_STREAM=1): groups of all heads form one
         # sequence; global index parity selects the SRAM slot, so a head may start
         # in either slot. Precompute both parities per head.
         self.select_head_any=api("context_quad_select_head_any", [u])
-        self.stream_tr=[[[None]*(BLOCKS//GROUP) for _ in range(heads)] for _ in range(2)]
+        self.stream_tr=[[[None]*(self.blocks//GROUP) for _ in range(heads)] for _ in range(2)]
         for parity in range(2):
             for head in range(heads):
-                for group in range(BLOCKS // GROUP):
+                for group in range(self.blocks // GROUP):
                     sq, so, ss = slots[(parity+group) % 2]
                     inp = transfer([(dp(self.qh)+head*self.head_bytes+group*GROUP*32768, sq, GROUP*32768)])
                     ret = transfer([(so, dp(self.out)+group*GROUP*32768, GROUP*32768),
@@ -180,12 +212,20 @@ class _Plan:
                     self.stream_tr[parity][head][group]=(inp,ret)
         self.transfers = [[] for _ in range(heads)]
         for head in range(heads):
-            for group in range(BLOCKS // GROUP):
+            for group in range(self.blocks // GROUP):
                 sq, so, ss = slots[group % 2]
                 inp = transfer([(dp(self.qh)+head*self.head_bytes+group*GROUP*32768, sq, GROUP*32768)])
                 ret = transfer([(so, dp(self.out)+group*GROUP*32768, GROUP*32768),
                                 (ss, dp(self.stats)+group*GROUP*STAT_BYTES, GROUP*STAT_BYTES)])
                 self.transfers[head].append((inp,ret))
+
+    def release(self):
+        """Free the native plan (all ECBs back to their pools) and the staging tensors."""
+        status = self._release()
+        if status:
+            raise RuntimeError(f"context_quad_release failed: {status}")
+        for name in ("qh", "kth", "vh", "out", "stats"):
+            setattr(self, name, None)
 
     def set_valid(self, valid: int) -> bool:
         """Switch the prepared TPC programs to another valid key count (nothing may be queued)."""
@@ -193,7 +233,7 @@ class _Plan:
             return True
         status = self._set_valid(valid)
         if status:
-            print(f"[h3direct] set_valid({valid}) failed: {status}; direct path disabled", flush=True)
+            print(f"[h3direct] set_valid({valid}) failed: {status}; rebuilding the plan at this length", flush=True)
             return False
         self.valid = valid
         return True
@@ -204,9 +244,9 @@ class _Plan:
         if self.staged > valid:
             hi = self.staged
             self.qh[:, valid:hi].zero_()
-            self.vh[:, valid:min(hi, KEYS)].zero_()
+            self.vh[:, valid:min(hi, self.keys)].zero_()
             for part in range(PARTS):
-                start = part * FIRST; width = min(FIRST, KEYS - start)
+                start = part * self.first; width = min(self.first, self.keys - start)
                 lo, top = max(valid - start, 0), min(hi - start, width)
                 if lo < top:
                     self.kth[:, start * DIM:(start + width) * DIM].view(-1, DIM, width)[:, :, lo:top].zero_()
@@ -240,7 +280,7 @@ class _Plan:
         """All listed heads as one cross-group sequence (two groups in flight
         across head boundaries). Same fences as within a head: every group after
         the first waits for its predecessor's two last PVs before reusing S."""
-        groups=BLOCKS//GROUP
+        groups=self.blocks//GROUP
         seq=[]
         for head in heads:
             parity=len(seq)&1
@@ -273,14 +313,26 @@ class _Plan:
 
 
 _PLAN: _Plan | None = None
-STATS = {"calls": 0, "direct_heads": 0, "fallback_heads": 0, "direct_s": 0.0,
+_RUNTIME_READY = False   # private SCAL stream and LUT initialised (once per process)
+STATS = {"calls": 0, "direct_heads": 0, "fallback_heads": 0, "direct_s": 0.0, "plan_switches": 0, "plan_prepare_s": 0.0,
          "gates_s":0.0,"pack_enqueue_s":0.0,"head_staging_wait_s":0.0,"head_compute_s":0.0}
 
 
-def _plan(heads: int = 1) -> _Plan:
+def _plan(heads: int = 1, keys: int = KEYS, valid0: int | None = None, rebuild: bool = False) -> _Plan:
+    """The plan for this bucket; another bucket (or rebuild=True) releases the current plan and prepares a new
+    one, prepared for valid0 when given."""
     global _PLAN
+    if _PLAN is not None and (_PLAN.keys != keys or rebuild):
+        torch.hpu.synchronize()
+        _PLAN.release()
+        _PLAN = None
+        STATS["plan_switches"] += 1
     if _PLAN is None:
-        _PLAN = _Plan(relaxed=os.environ.get("H3DIRECT_RELAXED", "0") == "1",heads=heads)
+        t = time.perf_counter()
+        _PLAN = _Plan(relaxed=os.environ.get("H3DIRECT_RELAXED", "0") == "1", heads=heads, keys=keys, valid0=valid0)
+        STATS["plan_prepare_s"] += time.perf_counter() - t
+        print(f"[h3direct] plan prepared keys={keys} blocks={_PLAN.blocks} in {time.perf_counter() - t:.2f} s",
+              flush=True)
     return _PLAN
 
 
@@ -313,7 +365,8 @@ def _stage_valid(plan, Lq) -> bool:
 def _direct_max_free_attention_impl(query, key, value, scale, original, exact):
     """Drop-in for max_free_attention(query, key, value, scale) -> [B, H, L, D]."""
     B, H, Lq, D = query.shape
-    if (B != 1 or D != DIM or not MIN_VALID <= Lq <= KEYS or key.shape != query.shape or value.shape != query.shape
+    keys = select_bucket(Lq)
+    if (B != 1 or D != DIM or keys is None or key.shape != query.shape or value.shape != query.shape
             or query.dtype != torch.bfloat16 or query.device.type != "hpu"
             or key.dtype!=query.dtype or value.dtype!=query.dtype
             or key.device!=query.device or value.device!=query.device or not 1<=H<=64
@@ -323,9 +376,12 @@ def _direct_max_free_attention_impl(query, key, value, scale, original, exact):
         return original(query,key,value,scale)
     if POW2_Q and not math.isclose(float(scale), DIM**-.5, rel_tol=0, abs_tol=1e-12):
         return original(query,key,value,scale)
-    plan = _plan(H)
+    plan = _plan(H, keys)
     if not _stage_valid(plan, Lq):
-        return exact(query, key, value, scale)
+        # In-place rewrite refused (program layout changed): prepare the plan at this length instead.
+        plan = _plan(H, keys, valid0=Lq, rebuild=True)
+        if not _stage_valid(plan, Lq):
+            return exact(query, key, value, scale)
     if POW2_Q and os.environ.get("H3DIRECT_FAST_GATES","0")=="1":
         return _fast_gates_impl(plan,query,key,value,scale,exact)
     t0 = time.perf_counter()
@@ -340,10 +396,10 @@ def _direct_max_free_attention_impl(query, key, value, scale, original, exact):
     # Transpose straight into each persistent K quarter. Padding stays zero;
     # avoid a full padded K allocation, four temporaries and the concat copy.
     for part in range(PARTS):
-        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,Lq-start)
+        start=part*plan.first;width=min(plan.first,plan.keys-start);valid_width=min(width,Lq-start)
         target=plan.kth[:,start*DIM:(start+width)*DIM].view(H,DIM,width)
         target[:,:,:valid_width].copy_(k[:,start:start+valid_width].transpose(1,2))
-    padded=torch.empty((H,BLOCKS*128,DIM),dtype=query.dtype,device=query.device)
+    padded=torch.empty((H,plan.blocks*128,DIM),dtype=query.dtype,device=query.device)
     result=padded[:,:Lq]
     STATS["pack_enqueue_s"]+=time.perf_counter()-t_pack
     t_stage=time.perf_counter();torch.hpu.synchronize()
@@ -425,10 +481,10 @@ def _fast_gates_impl(plan, query, key, value, scale, exact):
     torch.mul(q, INPUT_Q_SCALE, out=plan.qh[:, :Lq])                       # exact 2^-4, same as qs
     plan.vh[:, :Lq].copy_(v)
     for part in range(PARTS):
-        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,Lq-start)
+        start=part*plan.first;width=min(plan.first,plan.keys-start);valid_width=min(width,Lq-start)
         target=plan.kth[:,start*DIM:(start+width)*DIM].view(H,DIM,width)
         target[:,:,:valid_width].copy_(k[:,start:start+valid_width].transpose(1,2))
-    padded=torch.empty((H,BLOCKS*128,DIM),dtype=query.dtype,device=query.device)
+    padded=torch.empty((H,plan.blocks*128,DIM),dtype=query.dtype,device=query.device)
     result=padded[:,:Lq]
     STATS["pack_enqueue_s"]+=time.perf_counter()-t_pack
     t_stage=time.perf_counter()

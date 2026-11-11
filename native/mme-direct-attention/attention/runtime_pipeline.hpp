@@ -121,6 +121,14 @@ static int prepare_ecb(unsigned group, const std::vector<std::vector<char>> &pro
     return 0;
 }
 
+// Return a prepared ECB's host metadata and device code buffers to their SCAL pools. Nothing may be queued.
+static void release_ecb(PreparedEcb &job)
+{
+    if (job.code) scal_free_buffer(job.code);
+    if (job.metadata) scal_free_buffer(job.metadata);
+    job = PreparedEcb{};
+}
+
 // Rewrite a prepared ECB's device code in place. The new programs must reproduce the original layout exactly
 // (engine count, every program's offset and size), so the static descriptors in the host metadata stay valid
 // and no pool memory is allocated. The caller guarantees that nothing using the job is queued.
