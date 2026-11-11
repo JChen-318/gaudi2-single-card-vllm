@@ -880,6 +880,16 @@ H3 部署打开 fast + 对齐 128。
 - 同一 MME 上 QK 与 PV 不重叠（有无 barrier、先后顺序一样）。
 - 因此每个 128 行块的 MME 下限约 11.8 µs，MME-only 流水 11.60 µs，实际 12.7–13 µs；剩余约 1 µs 是 TPC/MME 争用。把 S 或 P 改成 FP8 的模拟都超出 1% 门限。
 
+issue #3（2026-11-11）修正了两个问题：
+- **MAXFREE 下溢后输出有限的错误值。** 行的真实最大值远低于上界 b 时（例如反平行或正交的大范数 q/k），exp(s − b) 整行下溢；被夹住的除法会给出 0，没有 NaN/Inf。
+  - 现在 `max_free_attention` 每次调用读回各 head 最小的行和余量（扣除零填充项之后），过小的 head 用新的 `exact_attention`（带真实行最大值）重算。默认开启，`VLLM_GAUDI_OMNI_SDPA_MAXFREE_GUARD=0` 关闭。
+  - 真实层输出逐位不变，每层 323.2 → 323.7 ms。
+  - 构造反例的最大误差从 1.0 降到 0。
+  - `exact_attention` 在头数少于 `PT_HPU_SDPA_HEAD_FACTOR` 时复制头：因子 2 下单头的 `sdpa_recomp_fwd` 编译失败。
+- **direct 路径只接受 L=37750（40 个文本 token）。** 现在任意 3·FIRST < L ≤ KEYS 都走 direct：只重建 TPC 程序并原地改写，尾部清零，被拒的 head 走 `exact_attention`。
+  - 容量档 `H3DIRECT_KEYS`：37760（≤ 50 token，与之前逐位相同）或 38272（≤ 562 token，约多 1%）。
+  - layer 25 在 28800–38272 各长度上 56 个 head 全部走 direct，对 FP32 误差 0.23–0.26%。
+
 DiT 一次前向 trace（正式路径，20.10 s）：注意力 16.8 s（含三层 FusedSDPA 1.16 s），FP8 线性层约 2.2 s，纯 TPC 图约 0.9 s，小图约 0.9 s，空闲 0.19 s。小图里最大的一项是动态 PEFT LoRA 在每个 FP8 线性层之后单独执行（每次前向 250 次降维 mm 和 250 次 addmm，约 0.45 s）。VAE 单次解码（tile 4）：注意力约 40%，FFN 约 33%，卷积可忽略。这些没有继续做。
 
 ## 24. vLLM-Omni 媒体模型：Qwen-Image 2.1

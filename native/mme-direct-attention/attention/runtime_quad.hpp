@@ -8,6 +8,10 @@ struct QuadPlan {
     PreparedEcb ex, nm;
     unsigned n = 0, tpcs = 0, sob = 0, monitor = 0, keys = 0;
     bool ready = false;
+    // Inputs of the TPC (exp/normalize) programs, the only part that depends on the valid key count;
+    // context_quad_set_valid rebuilds them in place.
+    uint64_t L[10] = {}, exp_isa = 0, norm_isa = 0;
+    unsigned factor = 1, valid = 0;
 };
 // Slot 1 (opt-in): separate Q/O/stats SRAM region for host DMA overlap;
 // --cross-group also assigns distinct synchronization pools to both slots.
@@ -150,7 +154,9 @@ extern "C" int context_quad_set_mme(unsigned slot, unsigned n, const uint32_t *w
 
 extern "C" int context_quad_layout(uint64_t base, unsigned keys, unsigned n, uint64_t *out)
 {
-    if (!out || base % 256 || keys < 512 || keys > 37760 || keys % 128 || n < 4 || n > (quad_query_rows==1024?24u:16u) || n % (quad_query_rows/128)) return -EINVAL;
+    // 38272 keys (first quarter 9600 = 5 x 1920, the G15 exp kernel's group) is the largest validated capacity;
+    // the caller still checks the SRAM end address.
+    if (!out || base % 256 || keys < 512 || keys > 38272 || keys % 128 || n < 4 || n > (quad_query_rows==1024?24u:16u) || n % (quad_query_rows/128)) return -EINVAL;
     uint64_t a = base;
     auto take = [&](uint64_t bytes) { uint64_t r = a; a = (a + bytes + 255) & ~255ull; return r; };
     uint64_t matrix = 128 * 128 * 2, wide = 128 * keys * 2;
@@ -210,6 +216,48 @@ static bool quad_disjoint_rows()
     return true;
 }
 
+// TPC programs of one prepared plan (exp per 128-query block, then normalize) for a given valid key count.
+// Only the last key quarter's exp column count and the normalize argument depend on valid; the command
+// structure, and therefore every program's size, does not (context_quad_set_valid relies on that).
+static int quad_build_tpc(const QuadPlan &p, unsigned valid, std::vector<std::vector<char>> &ex,
+                          std::vector<std::vector<char>> &nm)
+{
+    const unsigned n = p.n, tpcs = p.tpcs, factor = p.factor;
+    const unsigned first = quad_first_width(p.keys), last = p.keys - 3 * first;
+    if (valid > p.keys || valid <= 3 * first) return -EINVAL;
+    ex.assign(24, {}); nm.assign(24, {});
+    std::vector<std::vector<uint32_t>> cached(24);
+    int rc;
+    for (unsigned b = 0; b < n; ++b) {
+        const unsigned part = b % 4, slot = part == 3 ? 1 : 0;
+        const unsigned width = slot ? last : first, local_valid = slot ? valid - 3 * first : first;
+        const uint64_t S = p.L[3 + (b & 1)];
+        uint64_t addresses[3] = {p.L[7] + b * 4096 * factor, S, S};
+        unsigned cols[3] = {2, quad_exp_pad?local_valid:width, quad_exp_pad?local_valid:width}, rows[3] = {quad_query_rows, quad_query_rows, quad_query_rows};
+        const uint32_t padding[3]={0,quad_exp_padding,quad_exp_padding};
+        unsigned types[3] = {7, 6, 6}, strides[3] = {2, width+quad_row_pad, width+quad_row_pad};
+        for (unsigned i = 0; i < tpcs; ++i) {
+            if (!b) push_lut_bases(ex[i]);
+            unsigned unit = quad_query_rows * i / tpcs, units = quad_query_rows * (i + 1) / tpcs - unit;
+            rc = append_batch_exp(ex[i], cached[i], p.exp_isa, addresses, cols, rows, types, strides,
+                                   local_valid, unit, units, p.sob + 3 * b + 1, quad_exp_pad?padding:nullptr);
+            if (rc) return rc;
+        }
+    }
+    uint64_t addresses[3] = {p.L[5], p.L[7], p.L[5]};
+    unsigned cols[3] = {128, 2, 128}, rows[3] = {quad_query_rows * n, quad_query_rows * n, 128 * n * factor};
+    unsigned types[3] = {6, 7, 6};
+    for (unsigned i = 0; i < 24; ++i) {
+        if (i < tpcs) {
+            unsigned row = 128 * n * factor * i / tpcs, count = 128 * n * factor * (i + 1) / tpcs - row;
+            rc = append_tpc_fenced(nm[i], p.norm_isa, addresses, cols, rows, types, 3, valid, row, count, own_sob);
+            if (rc) return rc;
+        }
+        finish_program(ex[i]); finish_program(nm[i]);
+    }
+    return 0;
+}
+
 extern "C" int context_quad_prepare_slot(unsigned slot, uint64_t base, unsigned keys, unsigned valid, unsigned n,
                                           unsigned tpcs, const char *exp_path, const char *norm_path)
 {
@@ -249,13 +297,11 @@ extern "C" int context_quad_prepare_slot(unsigned slot, uint64_t base, unsigned 
     if (!exp || !norm) return -EINVAL;
     p.n = n; p.tpcs = tpcs;p.keys=keys; p.qk.resize(n); p.pv.resize(n);
     const uint64_t matrix = 128 * 128 * 2;
-    const unsigned first = quad_first_width(keys), last = keys - 3 * first;
+    const unsigned first = quad_first_width(keys);
     std::vector<std::vector<char>> ex(24), nm(24);
     std::vector<std::vector<std::vector<char>>> qraw(n), vraw(n);
-    std::vector<std::vector<uint32_t>> cached(24);
     for (unsigned b = 0; b < n; ++b) {
         const unsigned part = b % 4, slot = part == 3 ? 1 : 0;
-        unsigned width = slot ? last : first, local_valid = slot ? valid - 3 * first : first;
         const uint64_t S = L[3 + (b & 1)], Q = L[0] + (b / 4) * 4 * matrix * factor;
         const uint64_t KT = L[1] + (uint64_t)part * first * 128 * 2;
         const uint64_t V = L[2] + (uint64_t)part * first * 128 * 2;
@@ -299,18 +345,11 @@ extern "C" int context_quad_prepare_slot(unsigned slot, uint64_t base, unsigned 
         if (quad_mme_pack) { qraw[b].swap(qk); vraw[b].swap(pv); }
         else if ((rc = prepare_ecb(SCAL_MME_COMPUTE_GROUP, qk, p.qk[b])) ||
                  (rc = prepare_ecb(SCAL_MME_COMPUTE_GROUP, pv, p.pv[b]))) return rc;
-        uint64_t addresses[3] = {L[7] + b * 4096 * factor, S, S};
-        unsigned cols[3] = {2, quad_exp_pad?local_valid:width, quad_exp_pad?local_valid:width}, rows[3] = {quad_query_rows, quad_query_rows, quad_query_rows};
-        const uint32_t padding[3]={0,quad_exp_padding,quad_exp_padding};
-        unsigned types[3] = {7, 6, 6}, strides[3] = {2, width+quad_row_pad, width+quad_row_pad};
-        for (unsigned i = 0; i < tpcs; ++i) {
-            if (!b) push_lut_bases(ex[i]);
-            unsigned unit = quad_query_rows * i / tpcs, units = quad_query_rows * (i + 1) / tpcs - unit;
-            rc = append_batch_exp(ex[i], cached[i], exp, addresses, cols, rows, types, strides,
-                                   local_valid, unit, units, p.sob + 3 * b + 1, quad_exp_pad?padding:nullptr);
-            if (rc) return rc;
-        }
     }
+    for (unsigned i = 0; i < 10; ++i) p.L[i] = L[i];
+    p.exp_isa = exp; p.norm_isa = norm; p.factor = factor;
+    if ((rc = quad_build_tpc(p, valid, ex, nm))) return rc;
+    p.valid = valid;
     if (quad_mme_pack) {
         // Global order is Q0,Q1,PV0,Q2,PV1,...,Qlast,PVlast-1,PVlast.
         // Preserve this across pack boundaries (not separate mini-pipelines).
@@ -332,17 +371,6 @@ extern "C" int context_quad_prepare_slot(unsigned slot, uint64_t base, unsigned 
         }
         printf("MME_PACK slot=%u units=%u jobs=%zu original_jobs=%u\n",slot,quad_mme_pack,p.mme_batches.size(),2*n);fflush(stdout);
     }
-    uint64_t addresses[3] = {L[5], L[7], L[5]};
-    unsigned cols[3] = {128, 2, 128}, rows[3] = {quad_query_rows * n, quad_query_rows * n, 128 * n * factor};
-    unsigned types[3] = {6, 7, 6};
-    for (unsigned i = 0; i < 24; ++i) {
-        if (i < tpcs) {
-            unsigned row = 128 * n * factor * i / tpcs, count = 128 * n * factor * (i + 1) / tpcs - row;
-            rc = append_tpc_fenced(nm[i], norm, addresses, cols, rows, types, 3, valid, row, count, own_sob);
-            if (rc) return rc;
-        }
-        finish_program(ex[i]); finish_program(nm[i]);
-    }
     if ((rc = prepare_ecb(SCAL_TPC_COMPUTE_GROUP, ex, p.ex)) ||
         (rc = prepare_ecb(SCAL_TPC_COMPUTE_GROUP, nm, p.nm))) return rc;
     p.ready = true;
@@ -355,6 +383,27 @@ extern "C" int context_quad_prepare(uint64_t base, unsigned keys, unsigned valid
                                      unsigned tpcs, const char *exp_path, const char *norm_path)
 {
     return context_quad_prepare_slot(0, base, keys, valid, n, tpcs, exp_path, norm_path);
+}
+
+// Change the valid key count of both prepared slots (3 * first width < valid <= keys). Rebuilds only the TPC
+// exp/normalize programs and rewrites their device code in place; MME programs and head banks are untouched.
+// Nothing may be queued. Returns 0 if both slots already use valid.
+extern "C" int context_quad_set_valid(unsigned valid)
+{
+    if (!quad_plans[0].ready || !quad_plans[1].ready) return -EINVAL;
+    if (quad_pending || quad_inflight) return -EBUSY;
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        auto &p = quad_plans[slot];
+        if (p.valid == valid) continue;
+        std::vector<std::vector<char>> ex, nm;
+        int rc = quad_build_tpc(p, valid, ex, nm);
+        if (!rc) rc = reupload_ecb(SCAL_TPC_COMPUTE_GROUP, ex, p.ex);
+        if (!rc) rc = reupload_ecb(SCAL_TPC_COMPUTE_GROUP, nm, p.nm);
+        if (rc) { fprintf(stderr, "QUAD_SET_VALID_ERROR slot=%u valid=%u rc=%d\n", slot, valid, rc); return rc; }
+        p.valid = valid;
+    }
+    printf("QUAD_SET_VALID valid=%u\n", valid); fflush(stdout);
+    return 0;
 }
 
 static int quad_arm_block(const QuadPlan &p, unsigned b, const QuadPlan *prev = nullptr)

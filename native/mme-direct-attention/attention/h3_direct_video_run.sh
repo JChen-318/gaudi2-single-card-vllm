@@ -5,7 +5,9 @@ mode=${1:?baseline or direct}; tag=${2:?unique tag}
 [[ "$mode" == baseline || "$mode" == direct ]] || exit 2
 [[ "$tag" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
 O=/home/a/gsv-data/media/mme-direct-20261108/repro/attention
-P="$O/evidence/video-$tag"
+OUT=${H3_VIDEO_OUT:-/mnt/sas/tmp/mme-direct-run}   # outputs (MP4, logs, HL logs) off the system disk
+mkdir -p "$OUT"
+P="$OUT/video-$tag"
 name="gaudi2-h3-mme-$tag"; port=${H3_VIDEO_PORT:-8098}; nreq=${H3_VIDEO_NREQ:-3}
 [[ "$port" =~ ^[0-9]+$ && "$nreq" =~ ^[1-9][0-9]*$ ]] || exit 2
 if fuser /dev/accel/accel0 >/dev/null 2>&1; then echo 'Card busy'; exit 1; fi
@@ -19,6 +21,7 @@ pow2=${H3DIRECT_POW2Q:-$enable}
 [[ "$pow2" == 0 || "$pow2" == 1 ]] || exit 2
 printf 'mode=%s\ntag=%s\nport=%s\nnreq=%s\npow2_q=%s\nfirst_request=warmup\n' "$mode" "$tag" "$port" "$nreq" "$pow2" > "$P/config.txt"
 printf 'sdpa_softmax_mode=%s\nsdpa_maxfree=%s\nstream=%s\nfast_gates=%s\ncompiled_gates=%s\n' "${H3_SDPA_SOFTMAX_MODE:-fast}" "${H3_SDPA_MAXFREE:-1}" "${H3DIRECT_STREAM:-0}" "${H3DIRECT_FAST_GATES:-0}" "${H3DIRECT_COMPILED_GATES:-0}" >> "$P/config.txt"
+printf 'keys=%s\noverlay=%s\nprompt=%s\n' "${H3DIRECT_KEYS:-37760}" "${H3_ATTENTION_OVERLAY:-}" "${H3_VIDEO_PROMPT:-forest}" >> "$P/config.txt"
 printf 'te_pin=%s\nphase_offload=%s\nvae_tile_batch=%s\ntrace_call=%s\ntrace_decode=%s\n' "${H3_TE_PIN:-0}" "${H3_PHASE_OFFLOAD:-1}" "${H3_VAE_TILE_BATCH:-default}" "${H3_TRACE_CALL:--1}" "${H3_TRACE_DECODE:-0}" >> "$P/config.txt"
 sha256sum "$O"/h3_direct_attention.py "$O"/h3inject/sitecustomize.py "$O"/h3_video_container.sh "$O"/h3_direct_video_run.sh "$O"/build/libcontext_bridge.so "$O"/scal-attention-h3-1.24.1.json > "$P/source.sha256"
 hl-smi -Q timestamp,memory.used,utilization.aip,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total -f csv > "$P/health-before.csv"
@@ -50,7 +53,8 @@ cid=$(docker run -d --name "$name" \
  --mount type=bind,src=/usr/bin/fuser,dst=/usr/local/bin/fuser,readonly \
  --mount type=bind,src=/home/a/gsv-data/media/h3prof,dst=/home/a/gsv-data/media/h3prof,readonly \
  --mount type=bind,src="$O",dst="$O" \
- -e H3DIRECT_STREAM="${H3DIRECT_STREAM:-0}" -e H3DIRECT_FAST_GATES="${H3DIRECT_FAST_GATES:-0}" -e H3DIRECT_COMPILED_GATES="${H3DIRECT_COMPILED_GATES:-0}" -e H3_SDPA_SOFTMAX_MODE="${H3_SDPA_SOFTMAX_MODE:-fast}" -e H3_SDPA_MAXFREE="${H3_SDPA_MAXFREE:-1}" -e H3_TE_PIN="${H3_TE_PIN:-0}" -e H3_PHASE_OFFLOAD="${H3_PHASE_OFFLOAD:-1}" -e H3_VAE_TILE_BATCH="${H3_VAE_TILE_BATCH:-}" -e H3PROF_DIR="$P" -e H3PROF_TRACE_CALL="${H3_TRACE_CALL:--1}" -e H3PROF_TRACE_DECODE="${H3_TRACE_DECODE:-0}" -e H3DIRECT_ENABLE="$enable" -e H3DIRECT_POW2Q="$pow2" -e H3_VIDEO_PORT="$port" \
+ --mount type=bind,src="$OUT",dst="$OUT" \
+ -e H3DIRECT_STREAM="${H3DIRECT_STREAM:-0}" -e H3DIRECT_FAST_GATES="${H3DIRECT_FAST_GATES:-0}" -e H3DIRECT_COMPILED_GATES="${H3DIRECT_COMPILED_GATES:-0}" -e H3_SDPA_SOFTMAX_MODE="${H3_SDPA_SOFTMAX_MODE:-fast}" -e H3_SDPA_MAXFREE="${H3_SDPA_MAXFREE:-1}" -e H3DIRECT_KEYS="${H3DIRECT_KEYS:-37760}" -e H3_ATTENTION_OVERLAY="${H3_ATTENTION_OVERLAY:-}" -e H3_TE_PIN="${H3_TE_PIN:-0}" -e H3_PHASE_OFFLOAD="${H3_PHASE_OFFLOAD:-1}" -e H3_VAE_TILE_BATCH="${H3_VAE_TILE_BATCH:-}" -e H3PROF_DIR="$P" -e H3PROF_TRACE_CALL="${H3_TRACE_CALL:--1}" -e H3PROF_TRACE_DECODE="${H3_TRACE_DECODE:-0}" -e H3DIRECT_ENABLE="$enable" -e H3DIRECT_POW2Q="$pow2" -e H3_VIDEO_PORT="$port" \
  --entrypoint /bin/bash gaudi2-single-card-vllm:v17 "$O/h3_video_container.sh")
 printf '%s\n' "$cid" > "$P/container-id"
 (
@@ -70,7 +74,7 @@ for (( i=0; i<nreq; i++ )); do
  printf 'request %s running\n' "$i" > "$P/status"
  docker exec "$cid" /home/a/h3-omni-venv/bin/python /home/a/gsv-docker/vllm-gaudi/tools/minimax_h3/request_video.py \
   --api-url "http://127.0.0.1:$port/v1/videos/sync" --task t2va \
-  --prompt 'A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.' \
+  --prompt "${H3_VIDEO_PROMPT:-A small stream flows through a sunlit forest. The camera slowly moves toward the water. Birds chirp in the trees and water gurgles over smooth stones. Natural continuous sound, no music.}" \
   --output "$P/out$i.mp4" --metadata "$P/out$i.json" --width 1344 --height 768 --duration 5.167 --fps 24 \
   --lightx2v-4step-lora /mnt/sas/models/minimax-h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors \
   --seed "$((2101 + i % 2))" > "$P/request$i.log" 2>&1

@@ -121,6 +121,40 @@ static int prepare_ecb(unsigned group, const std::vector<std::vector<char>> &pro
     return 0;
 }
 
+// Rewrite a prepared ECB's device code in place. The new programs must reproduce the original layout exactly
+// (engine count, every program's offset and size), so the static descriptors in the host metadata stay valid
+// and no pool memory is allocated. The caller guarantees that nothing using the job is queued.
+static int reupload_ecb(unsigned group, const std::vector<std::vector<char>> &programs, PreparedEcb &job)
+{
+    if (!job.code || job.group != group || programs.size() != job.program_sizes.size()) return -EINVAL;
+    std::vector<char> combined;
+    for (size_t i = 0; i < programs.size(); ++i) {
+        if (!validate_static_program(programs[i], group)) return -EINVAL;
+        combined.resize((combined.size() + 63) & ~63u, 0);
+        if (combined.size() != job.program_offsets[i] || programs[i].size() != job.program_sizes[i]) return -E2BIG;
+        combined.insert(combined.end(), programs[i].begin(), programs[i].end());
+    }
+    combined.resize((combined.size() + 255) & ~255u, 0);
+    if (combined.size() != job.code_image.size()) return -E2BIG;
+    if (combined == job.code_image) return 0;
+    void *staging = nullptr; synStreamHandle upload = nullptr;
+    if (synHostMalloc(0, combined.size(), 0, &staging) != synSuccess ||
+        synStreamCreateGeneric(&upload, 0, 0) != synSuccess) return -ENOMEM;
+    memcpy(staging, combined.data(), combined.size());
+    auto status = synMemCopyAsync(upload, (uintptr_t)staging, combined.size(), job.code_info.device_address, HOST_TO_DRAM);
+    if (status == synSuccess) status = synStreamSynchronize(upload);
+    if (status == synSuccess) {
+        memset(staging, 0, combined.size());
+        status = synMemCopyAsync(upload, job.code_info.device_address, combined.size(), (uintptr_t)staging, DRAM_TO_HOST);
+        if (status == synSuccess) status = synStreamSynchronize(upload);
+    }
+    bool equal = status == synSuccess && !memcmp(staging, combined.data(), combined.size());
+    synStreamDestroy(upload); synHostFree(0, staging, 0);
+    if (!equal) return -EIO;
+    job.code_image.swap(combined);
+    return 0;
+}
+
 // Clone validated MME programs, rebinding only operand B inside the full
 // descriptor WREG_BULK packets. All geometry, fences and SRAM addresses stay.
 static int clone_mme_b(const PreparedEcb &src,uint64_t old_base,uint64_t new_base,

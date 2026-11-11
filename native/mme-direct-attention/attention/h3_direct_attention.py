@@ -34,11 +34,18 @@ from pathlib import Path
 import torch
 
 ROOT = Path(os.environ.get("H3DIRECT_ROOT", "/home/a/gsv-data/media/mme-direct-20261108/repro/attention"))
-KEYS, VALID, DIM = 37760, 37750, 128
+# Key capacity bucket: 37760 (H3 text prompts up to 50 tokens: 37296 video + 414 audio + text) or 38272 (up to
+# 562 tokens; about 1.4% more attention work). One plan per process, so a server with mixed prompt lengths
+# should use 38272. VALID is only the plan's initial valid length; any 3 * FIRST < L <= KEYS runs direct.
+KEYS = int(os.environ.get("H3DIRECT_KEYS", "37760"))
+if KEYS not in (37760, 38272):
+    raise ValueError(f"H3DIRECT_KEYS must be 37760 or 38272, got {KEYS}")
+VALID, DIM = 37750, 128
 GROUP = 16                      # 128-query blocks per native group
-BLOCKS = 304                    # 37750 queries padded to 19 groups of 16 blocks
+BLOCKS = 304                    # up to 38912 queries: 19 groups of 16 blocks
 PARTS, QUANTUM = 4, 128
 FIRST = (KEYS + PARTS * QUANTUM - 1) // (PARTS * QUANTUM) * QUANTUM   # 9472
+MIN_VALID = 3 * FIRST + 1       # the last key quarter must hold at least one valid key
 STAT_BYTES = 4096
 POW2_Q = os.environ.get("H3DIRECT_POW2Q", "0") == "1"
 INPUT_Q_SCALE = .0625 if POW2_Q else None
@@ -140,6 +147,9 @@ class _Plan:
         assert api("context_quad_layout_alt", [u64, u, u, up])(base, KEYS, GROUP, A) == 0 and A[4] <= info[1] + info[2]
         assert api("context_quad_prepare_slot", [u, u64, u, u, u, u, C.c_char_p, C.c_char_p])(
             1, base, KEYS, VALID, GROUP, 24, exp_bin, norm_bin) == 0
+        self.valid = VALID
+        self.staged = VALID            # rows [0, staged) of qh/vh (and K columns) may hold data
+        self._set_valid = api("context_quad_set_valid", [u])
         bank_status=api("context_quad_prepare_head_banks", [u])(heads)
         if bank_status:raise RuntimeError(f"head bank preparation failed: {bank_status}")
         self.select_head=api("context_quad_select_head", [u])
@@ -176,6 +186,31 @@ class _Plan:
                 ret = transfer([(so, dp(self.out)+group*GROUP*32768, GROUP*32768),
                                 (ss, dp(self.stats)+group*GROUP*STAT_BYTES, GROUP*STAT_BYTES)])
                 self.transfers[head].append((inp,ret))
+
+    def set_valid(self, valid: int) -> bool:
+        """Switch the prepared TPC programs to another valid key count (nothing may be queued)."""
+        if valid == self.valid:
+            return True
+        status = self._set_valid(valid)
+        if status:
+            print(f"[h3direct] set_valid({valid}) failed: {status}; direct path disabled", flush=True)
+            return False
+        self.valid = valid
+        return True
+
+    def clear_tail(self, valid: int):
+        """Zero Q/V rows and K columns in [valid, staged): padded keys must score exactly 0 and padded values must
+        be finite zeros (0 * stale NaN would poison the PV product)."""
+        if self.staged > valid:
+            hi = self.staged
+            self.qh[:, valid:hi].zero_()
+            self.vh[:, valid:min(hi, KEYS)].zero_()
+            for part in range(PARTS):
+                start = part * FIRST; width = min(FIRST, KEYS - start)
+                lo, top = max(valid - start, 0), min(hi - start, width)
+                if lo < top:
+                    self.kth[:, start * DIM:(start + width) * DIM].view(-1, DIM, width)[:, :, lo:top].zero_()
+        self.staged = valid
 
     def run_head(self, head: int, output_address: int):
         """All framework work must be quiesced. Output points into the caller's
@@ -249,7 +284,8 @@ def _plan(heads: int = 1) -> _Plan:
     return _PLAN
 
 
-def head_gates(qs: torch.Tensor, key: torch.Tensor, value: torch.Tensor, score_factor: float = 1.0) -> list[bool]:
+def head_gates(qs: torch.Tensor, key: torch.Tensor, value: torch.Tensor, score_factor: float = 1.0,
+               valid: int = VALID) -> list[bool]:
     """Fixed-0 gates of batch_attention_probe.py per head. qs/key/value [H, L, D] (qs already scaled)."""
     kmax = key.float().norm(dim=-1).amax(-1)                      # [H]
     upper = (qs.float().norm(dim=-1).amax(-1) * kmax * score_factor)              # [H] = max_i |q_i| * max_j |k_j|
@@ -260,16 +296,24 @@ def head_gates(qs: torch.Tensor, key: torch.Tensor, value: torch.Tensor, score_f
     for b, vm in zip(upper, vmax):
         good = math.isfinite(b) and math.isfinite(vm) and b <= 80
         good = good and -b - shift - .25 > -86
-        good = good and b - shift + .25 + math.log(VALID) + math.log(max(1., vm)) < 86
-        good = good and math.log(VALID) - b - shift - .25 > math.log(1e-30)
+        good = good and b - shift + .25 + math.log(valid) + math.log(max(1., vm)) < 86
+        good = good and math.log(valid) - b - shift - .25 > math.log(1e-30)
         ok.append(good)
     return ok
 
 
-def _direct_max_free_attention_impl(query, key, value, scale, original):
+def _stage_valid(plan, Lq) -> bool:
+    """Point the plan at Lq valid keys and clear stale tails. Our programs are never queued between calls."""
+    if not plan.set_valid(Lq):
+        return False
+    plan.clear_tail(Lq)
+    return True
+
+
+def _direct_max_free_attention_impl(query, key, value, scale, original, exact):
     """Drop-in for max_free_attention(query, key, value, scale) -> [B, H, L, D]."""
     B, H, Lq, D = query.shape
-    if (B != 1 or D != DIM or Lq != VALID or key.shape != query.shape or value.shape != query.shape
+    if (B != 1 or D != DIM or not MIN_VALID <= Lq <= KEYS or key.shape != query.shape or value.shape != query.shape
             or query.dtype != torch.bfloat16 or query.device.type != "hpu"
             or key.dtype!=query.dtype or value.dtype!=query.dtype
             or key.device!=query.device or value.device!=query.device or not 1<=H<=64
@@ -280,12 +324,14 @@ def _direct_max_free_attention_impl(query, key, value, scale, original):
     if POW2_Q and not math.isclose(float(scale), DIM**-.5, rel_tol=0, abs_tol=1e-12):
         return original(query,key,value,scale)
     plan = _plan(H)
+    if not _stage_valid(plan, Lq):
+        return exact(query, key, value, scale)
     if POW2_Q and os.environ.get("H3DIRECT_FAST_GATES","0")=="1":
-        return _fast_gates_impl(plan,query,key,value,scale,original)
+        return _fast_gates_impl(plan,query,key,value,scale,exact)
     t0 = time.perf_counter()
     qs = query[0] * (INPUT_Q_SCALE if POW2_Q else scale)                                          # [H, L, D] bf16, as exported
     k, v = key[0], value[0]
-    gates = head_gates(qs, k, v, SCORE_FACTOR)
+    gates = head_gates(qs, k, v, SCORE_FACTOR, Lq)
     t_pack=time.perf_counter();STATS["gates_s"]+=t_pack-t0
     # Stage all heads at once. Static head banks bind K/V into these owned,
     # persistent tensors; Q/O DMA runs without intervening framework work.
@@ -294,7 +340,7 @@ def _direct_max_free_attention_impl(query, key, value, scale, original):
     # Transpose straight into each persistent K quarter. Padding stays zero;
     # avoid a full padded K allocation, four temporaries and the concat copy.
     for part in range(PARTS):
-        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,VALID-start)
+        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,Lq-start)
         target=plan.kth[:,start*DIM:(start+width)*DIM].view(H,DIM,width)
         target[:,:,:valid_width].copy_(k[:,start:start+valid_width].transpose(1,2))
     padded=torch.empty((H,BLOCKS*128,DIM),dtype=query.dtype,device=query.device)
@@ -316,7 +362,7 @@ def _direct_max_free_attention_impl(query, key, value, scale, original):
         STATS["head_compute_s"]+=time.perf_counter()-t_compute
     if slow:
         idx = torch.tensor(slow, device=query.device)
-        result[idx] = original(query[:, idx], key[:, idx], value[:, idx], scale)[0]
+        result[idx] = exact(query[:, idx], key[:, idx], value[:, idx], scale)[0]
     torch.hpu.synchronize()
     STATS["calls"] += 1
     STATS["direct_heads"] += H - len(slow)
@@ -324,19 +370,19 @@ def _direct_max_free_attention_impl(query, key, value, scale, original):
     elapsed=time.perf_counter()-t0
     STATS["direct_s"] += elapsed
     if os.environ.get("H3DIRECT_LOG")=="1":
-        print("[h3direct] "+json.dumps(dict(call=STATS["calls"],heads=H,direct_heads=H-len(slow),
+        print("[h3direct] "+json.dumps(dict(call=STATS["calls"],heads=H,valid=Lq,direct_heads=H-len(slow),
               fallback_heads=slow,pow2_q=POW2_Q,wall_s=round(elapsed,6))),flush=True)
     return result.unsqueeze(0)
 
 
-def _gate_decisions(upper, vmax, finite):
+def _gate_decisions(upper, vmax, finite, valid=VALID):
     shift = EXP_SHIFT * math.log(2.0)
     ok = []
     for b, vm, fin in zip(upper, vmax, finite):
         good = fin and math.isfinite(b) and math.isfinite(vm) and b <= 80
         good = good and -b - shift - .25 > -86
-        good = good and b - shift + .25 + math.log(VALID) + math.log(max(1., vm)) < 86
-        good = good and math.log(VALID) - b - shift - .25 > math.log(1e-30)
+        good = good and b - shift + .25 + math.log(valid) + math.log(max(1., vm)) < 86
+        good = good and math.log(valid) - b - shift - .25 > math.log(1e-30)
         ok.append(good)
     return ok
 
@@ -364,7 +410,7 @@ def _gate_fn():
     return _GATE_COMPILED
 
 
-def _fast_gates_impl(plan, query, key, value, scale, original):
+def _fast_gates_impl(plan, query, key, value, scale, exact):
     """Opt-in (H3DIRECT_FAST_GATES=1, POW2Q only). Same gate formulas as
     head_gates, but: norms accumulate in FP32 without materialising FP32 copies;
     |Q*2^-4| = 2^-4*|Q| exactly; all staging copies are enqueued before the one
@@ -379,7 +425,7 @@ def _fast_gates_impl(plan, query, key, value, scale, original):
     torch.mul(q, INPUT_Q_SCALE, out=plan.qh[:, :Lq])                       # exact 2^-4, same as qs
     plan.vh[:, :Lq].copy_(v)
     for part in range(PARTS):
-        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,VALID-start)
+        start=part*FIRST;width=min(FIRST,KEYS-start);valid_width=min(width,Lq-start)
         target=plan.kth[:,start*DIM:(start+width)*DIM].view(H,DIM,width)
         target[:,:,:valid_width].copy_(k[:,start:start+valid_width].transpose(1,2))
     padded=torch.empty((H,BLOCKS*128,DIM),dtype=query.dtype,device=query.device)
@@ -389,7 +435,7 @@ def _fast_gates_impl(plan, query, key, value, scale, original):
     upper_l, vmax_l, check_l = gate_vals.cpu().tolist()                  # the one readback
     torch.hpu.synchronize()
     STATS["head_staging_wait_s"]+=time.perf_counter()-t_stage
-    gates = _gate_decisions(upper_l, vmax_l, [math.isfinite(c) for c in check_l])
+    gates = _gate_decisions(upper_l, vmax_l, [math.isfinite(c) for c in check_l], Lq)
     output_base=plan._data_ptr(padded)
     slow = [h for h in range(H) if not gates[h]]
     t_compute=time.perf_counter()
@@ -401,7 +447,7 @@ def _fast_gates_impl(plan, query, key, value, scale, original):
     STATS["head_compute_s"]+=time.perf_counter()-t_compute
     if slow:
         idx = torch.tensor(slow, device=query.device)
-        result[idx] = original(query[:, idx], key[:, idx], value[:, idx], scale)[0]
+        result[idx] = exact(query[:, idx], key[:, idx], value[:, idx], scale)[0]
     torch.hpu.synchronize()
     STATS["calls"] += 1
     STATS["direct_heads"] += H - len(slow)
@@ -409,19 +455,39 @@ def _fast_gates_impl(plan, query, key, value, scale, original):
     elapsed=time.perf_counter()-t0
     STATS["direct_s"] += elapsed
     if os.environ.get("H3DIRECT_LOG")=="1":
-        print("[h3direct] "+json.dumps(dict(call=STATS["calls"],heads=H,direct_heads=H-len(slow),
+        print("[h3direct] "+json.dumps(dict(call=STATS["calls"],heads=H,valid=Lq,direct_heads=H-len(slow),
               fallback_heads=slow,pow2_q=POW2_Q,fast_gates=True,wall_s=round(elapsed,6))),flush=True)
     return result.unsqueeze(0)
 
 
+def _exact_attention(query, key, value, scale):
+    """Row-max softmax attention [B, H, L, D] for rejected heads (same algorithm as the fixed vllm-gaudi
+    exact_attention): FusedSDPA with stats, aligned key head + tail merged exactly."""
+    import vllm_gaudi.omni.attention as attn
+    query, key, value = query.contiguous(), key.contiguous(), value.contiguous()
+    if query.device.type != "hpu":
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value, scale=scale)
+    heads, factor = query.shape[1], int(os.environ.get("PT_HPU_SDPA_HEAD_FACTOR", "1") or 1)
+    if heads < factor:  # FusedSDPA fails to compile with fewer heads than PT_HPU_SDPA_HEAD_FACTOR
+        widen = lambda t: t.repeat(1, -(-factor // heads), 1, 1)[:, :factor]  # noqa: E731
+        return _exact_attention(widen(query), widen(key), widen(value), scale)[:, :heads]
+    split = attn.kv_split_point(key.shape[-2])
+    if split:
+        o1, m1, l1 = attn._sdpa_with_stats(query, key[..., :split, :].contiguous(), value[..., :split, :].contiguous(), scale)
+        o2, m2, l2 = attn._sdpa_with_stats(query, key[..., split:, :].contiguous(), value[..., split:, :].contiguous(), scale)
+        return attn.merge_kv_split(o1, m1, l1, o2, m2, l2)
+    from habana_frameworks.torch.hpex.kernels import FusedSDPA
+    return FusedSDPA.apply(query, key, value, None, 0.0, False, scale, attn.HPU_SDPA_SOFTMAX_MODE, True)
+
+
 _CALL_LOCK=threading.Lock()
 @torch.compiler.disable
-def direct_max_free_attention(query,key,value,scale,original):
+def direct_max_free_attention(query,key,value,scale,original,exact=None):
     # Protect persistent staging and native head selection against reentrancy.
     # Other unrelated device computation still requires the caller's usual
     # single-worker/stream synchronization contract.
     with _CALL_LOCK:
-        return _direct_max_free_attention_impl(query,key,value,scale,original)
+        return _direct_max_free_attention_impl(query,key,value,scale,original,exact or _exact_attention)
 
 
 def install(attn=None) -> bool:
@@ -431,10 +497,11 @@ def install(attn=None) -> bool:
     if getattr(attn, "_h3direct_installed", False):
         return True
     original = attn.max_free_attention
+    exact = getattr(attn, "exact_attention", None) or _exact_attention
 
     def patched(query, key, value, scale, chunk=attn.HPU_SDPA_MAX_FREE_CHUNK):
         return direct_max_free_attention(query, key, value, scale,
-                                         lambda q, k, v, s: original(q, k, v, s, chunk))
+                                         lambda q, k, v, s: original(q, k, v, s, chunk), exact)
     attn.max_free_attention = patched
     attn._h3direct_installed = True
     return True

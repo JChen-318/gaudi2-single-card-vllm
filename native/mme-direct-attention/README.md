@@ -17,6 +17,17 @@
 - 视频：与生产输出 PSNR 约 18 dB；但生产本身与全 FusedSDPA 也只有约 18 dB，扩散过程会放大注意力实现间的微小差异，所以这不能单独当作质量回退的证据，也不能证明质量合格。
 - 锁页 / DiT 常驻两项不改变 DiT 输出（音频逐位相同）；视频只因 VAE tile 批 4（对 28）不同，而 tile 4 与逐块参考逐位相同。DiT 常驻只适用 t2va/FL2VA（Ref2VA 需要 phase offload）。
 
+## 适用范围与回退（issue #3 之后，2026-11-11）
+
+- H3 attention 长度 = 视频 37296 + 音频 414 + 文本 token 数。上面的结果是 40 个文本 token（L=37750）。6da6fb1 之前的版本只接受 L=37750，换一个长度不同的提示词就整层回退，没有加速。
+- 现在支持任意 3·FIRST < L ≤ KEYS。长度变化时只重建 TPC exp/归一化程序并原地改写显存里的代码，MME 程序和 56 套 head 缓存不变，超出长度的 Q/K/V 尾部清零。
+- 容量档 `H3DIRECT_KEYS`：
+  - `37760`（默认）：文本 ≤ 50 token，输出与之前逐位相同。
+  - `38272`：文本 ≤ 562 token，attention 约多 1% 工作量。每个进程只有一个执行计划，提示词长度不一的服务应选这一档。
+  - 超出容量的长度仍走原路径。
+- 过不了门限的 head 改走带真实行最大值的精确 attention（`exact_attention`），不再交给 MAXFREE。生产 MAXFREE 本身也加了运行时下溢检测：构造的反平行/正交大范数输入原来输出全 0，现在输出 1；真实层输出逐位不变，每层多约 0.3 ms。
+- 证据：`attention/evidence/issue3-fix-20261111.md`；测试 `attention/issue3_test.py`。
+
 ## 硬件结论（本软件栈 SynapseAI 1.24.1）
 
 - **QK 受每个 MME 的输出侧限制**：恒定输出、K 从 32 到 256 时间几乎不变；单 MME 写一半输出与双 MME 写全部同时。斜率约 0.82 TB/s/MME（双 MME 约 1.65 TB/s），原版编译器的 `torch.matmul` 也到同一值（`attention/evidence/mme-compiler-reference-20261109.md`、`mme-ksweep-20261109.md`）。这不是写活跃计数器的测量，外部"单 MME 3.2 TB/s"的口径未能复现。

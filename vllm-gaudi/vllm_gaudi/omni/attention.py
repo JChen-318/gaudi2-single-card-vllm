@@ -57,17 +57,57 @@ HPU_SDPA_MAX_FREE_CHUNK = int(os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE_CHUNK
 HPU_SDPA_MAX_FREE_SKIP = frozenset(
     int(x) for x in os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE_SKIP_LAYERS", "").replace(" ", "").split(",") if x)
 HPU_SDPA_MAX_FREE_MIN_KV = 4096
+# Underflow guard (default on): the bound can exceed a row's real maximum by so much that exp(s - b) underflows for
+# the whole row (for example anti-parallel or orthogonal large-norm q/k), and the clamped division then returns a
+# finite but wrong result. Each call reads back every head's smallest row sum (one host sync per call); heads below
+# the threshold are recomputed with exact_attention. In-range heads are unchanged. 0 turns the check off.
+HPU_SDPA_MAX_FREE_GUARD = os.environ.get("VLLM_GAUDI_OMNI_SDPA_MAXFREE_GUARD", "1") == "1"
+HPU_SDPA_MAX_FREE_MIN_ROW_SUM = 1e-24  # about exp(-55); FP32/BF16 normals reach exp(-87)
 
 
 def _max_free_chunk(qc: torch.Tensor, key: torch.Tensor, value: torch.Tensor, bound: torch.Tensor,
-                    pad: float) -> torch.Tensor:
+                    pad: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Returns the chunk's output and each head's smallest row-sum margin [B, H]: the padding-corrected row sum
+    divided by max(MIN_ROW_SUM, 1e-3 * padding contribution). Below 1 the row sum underflowed, or the subtraction
+    of the padding term lost the real sum to cancellation."""
     scores = torch.matmul(qc, key.transpose(-1, -2))
     # The clamp only guards against an unexpected outlier (exp overflow); in range it changes nothing.
     probs = torch.exp(torch.clamp(scores - bound, max=30.0))
     row_sum = probs.sum(-1, keepdim=True, dtype=torch.float32)
+    floor = torch.full_like(row_sum, HPU_SDPA_MAX_FREE_MIN_ROW_SUM)
     if pad:  # zero-padded keys score 0: each added exp(-b) to the sum and nothing to the numerator
-        row_sum = row_sum - pad * torch.exp(-bound.float())
-    return (torch.matmul(probs, value).float() / row_sum.clamp(min=1e-30)).to(qc.dtype)
+        padding = pad * torch.exp(-bound.float())
+        row_sum = row_sum - padding
+        floor = torch.maximum(floor, 1e-3 * padding)
+    smallest = (row_sum / floor).amin(dim=(-2, -1))
+    return (torch.matmul(probs, value).float() / row_sum.clamp(min=1e-30)).to(qc.dtype), smallest
+
+
+@torch.compiler.disable
+def exact_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, scale: float) -> torch.Tensor:
+    """Unmasked softmax attention with a real row maximum. query/key/value [B, H, L, D], same head count; returns
+    [B, H, Lq, D]. On HPU an unaligned key length runs as an aligned head plus a short tail merged exactly (see
+    kv_split_point); elsewhere torch SDPA."""
+    query, key, value = query.contiguous(), key.contiguous(), value.contiguous()
+    if query.device.type != "hpu":
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value, scale=scale)
+    heads, factor = query.shape[1], int(os.environ.get("PT_HPU_SDPA_HEAD_FACTOR", "1") or 1)
+    if heads < factor:
+        # FusedSDPA splits heads by PT_HPU_SDPA_HEAD_FACTOR and fails to compile with fewer heads than the factor
+        # (one head at factor 2): run duplicated heads and keep the first.
+        def widen(t: torch.Tensor) -> torch.Tensor:
+            return t.repeat(1, -(-factor // heads), 1, 1)[:, :factor]
+        return exact_attention(widen(query), widen(key), widen(value), scale)[:, :heads]
+    kv_length = key.shape[-2]
+    split = kv_split_point(kv_length)
+    if split:
+        o1, m1, l1 = _sdpa_with_stats(query, key[..., :split, :].contiguous(), value[..., :split, :].contiguous(),
+                                      scale)
+        o2, m2, l2 = _sdpa_with_stats(query, key[..., split:, :].contiguous(), value[..., split:, :].contiguous(),
+                                      scale)
+        return merge_kv_split(o1, m1, l1, o2, m2, l2)
+    from habana_frameworks.torch.hpex.kernels import FusedSDPA
+    return FusedSDPA.apply(query, key, value, None, 0.0, False, scale, HPU_SDPA_SOFTMAX_MODE, True)
 
 
 _MAX_FREE_CHUNK_COMPILED = None
@@ -100,11 +140,24 @@ def max_free_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tens
         value = torch.nn.functional.pad(value, (0, 0, 0, pad))
     rows = query.shape[-2]
     run = _chunk_fn(query.device.type)
-    outs = [
+    parts = [
         run(q_scaled[..., i:i + chunk, :], key, value, bound[..., i:i + chunk, :], float(pad))
         for i in range(0, rows, chunk)
     ]
-    return outs[0] if len(outs) == 1 else torch.cat(outs, dim=-2)
+    output = parts[0][0] if len(parts) == 1 else torch.cat([part[0] for part in parts], dim=-2)
+    if not HPU_SDPA_MAX_FREE_GUARD:
+        return output
+    smallest = torch.stack([part[1] for part in parts]).amin(0).cpu()  # [B, H]; the one host sync
+    # NaN compares false, so a NaN row sum also selects the exact path.
+    bad = [(b, h) for b in range(smallest.shape[0]) for h in range(smallest.shape[1])
+           if not float(smallest[b, h]) >= 1.0]
+    if bad:
+        key, value = key[..., :key.shape[-2] - pad, :], value[..., :value.shape[-2] - pad, :]
+        for b in sorted({b for b, _ in bad}):
+            heads = torch.tensor([h for bb, h in bad if bb == b], device=output.device)
+            output[b, heads] = exact_attention(query[b:b + 1, heads], key[b:b + 1, heads], value[b:b + 1, heads],
+                                               scale)[0]
+    return output
 
 
 def mark_max_free_layers(pipeline: object) -> int:
@@ -288,4 +341,4 @@ class HPUSDPAImpl(SDPAImpl):
 
 
 __all__ = ["HPU_SDPA_KV_ALIGN", "HPU_SDPA_SOFTMAX_MODE", "HPUSDPABackend", "HPUSDPAImpl", "additive_mask",
-           "kv_split_point", "mark_max_free_layers", "max_free_attention", "merge_kv_split"]
+           "exact_attention", "kv_split_point", "mark_max_free_layers", "max_free_attention", "merge_kv_split"]
