@@ -385,24 +385,79 @@ extern "C" int context_quad_prepare(uint64_t base, unsigned keys, unsigned valid
     return context_quad_prepare_slot(0, base, keys, valid, n, tpcs, exp_path, norm_path);
 }
 
+// Set when a failed set_valid could not restore the old device code: the TPC programs of the prepared plan are
+// in an unknown state, so submit and set_valid refuse until context_quad_release.
+static bool quad_poisoned = false;
+// Test-only fault injection (context_quad_test_fail_write): fail the Nth device write of the next set_valid
+// update (1-based, 0 = off), and with restore != 0 also fail every restore write.
+static unsigned quad_test_fail_write = 0;
+static int quad_test_fail_restore = 0;
+
+extern "C" int context_quad_test_fail_write(unsigned nth, int restore)
+{
+    quad_test_fail_write = nth; quad_test_fail_restore = restore;
+    return 0;
+}
+
 // Change the valid key count of both prepared slots (3 * first width < valid <= keys). Rebuilds only the TPC
 // exp/normalize programs and rewrites their device code in place; MME programs and head banks are untouched.
 // Nothing may be queued. Returns 0 if both slots already use valid.
+// All-or-nothing: every program is built and its layout checked against the prepared code before any device
+// write. If a write fails, every job written so far (and the failing one) gets its previous code back and the
+// plan keeps its old valid count; the error is returned. If that restore also fails, the plan is poisoned and
+// -ENOTRECOVERABLE is returned; the caller must release it.
 extern "C" int context_quad_set_valid(unsigned valid)
 {
+    if (quad_poisoned) return -ENOTRECOVERABLE;
     if (!quad_plans[0].ready || !quad_plans[1].ready) return -EINVAL;
     if (quad_pending || quad_inflight) return -EBUSY;
+    struct Update { PreparedEcb *job; std::vector<char> image; };
+    std::vector<Update> updates;
     for (unsigned slot = 0; slot < 2; ++slot) {
         auto &p = quad_plans[slot];
         if (p.valid == valid) continue;
         std::vector<std::vector<char>> ex, nm;
         int rc = quad_build_tpc(p, valid, ex, nm);
-        if (!rc) rc = reupload_ecb(SCAL_TPC_COMPUTE_GROUP, ex, p.ex);
-        if (!rc) rc = reupload_ecb(SCAL_TPC_COMPUTE_GROUP, nm, p.nm);
-        if (rc) { fprintf(stderr, "QUAD_SET_VALID_ERROR slot=%u valid=%u rc=%d\n", slot, valid, rc); return rc; }
-        p.valid = valid;
+        for (auto [programs, job] : {std::pair{&ex, &p.ex}, std::pair{&nm, &p.nm}}) {
+            if (rc) break;
+            std::vector<char> image;
+            rc = stage_ecb_image(SCAL_TPC_COMPUTE_GROUP, *programs, *job, image);
+            if (!rc && image != job->code_image) updates.push_back({job, std::move(image)});
+        }
+        if (rc) {
+            fprintf(stderr, "QUAD_SET_VALID_ERROR slot=%u valid=%u rc=%d (nothing written)\n", slot, valid, rc);
+            quad_test_fail_write = 0;
+            return rc;
+        }
     }
-    printf("QUAD_SET_VALID valid=%u\n", valid); fflush(stdout);
+    const unsigned fail_at = quad_test_fail_write; const int fail_restore = quad_test_fail_restore;
+    quad_test_fail_write = 0; quad_test_fail_restore = 0;
+    size_t written = 0; int rc = 0;
+    for (; written < updates.size(); ++written) {
+        rc = fail_at == written + 1 ? -EIO : write_ecb_image(*updates[written].job, updates[written].image);
+        if (rc) break;
+    }
+    if (rc) {
+        // updates[0..written] may differ from job.code_image on the device (the failing write may be partial).
+        int restore_rc = 0;
+        for (size_t i = 0; i <= written && i < updates.size(); ++i) {
+            const auto &job = *updates[i].job;
+            int r = fail_restore ? -EIO : write_ecb_image(job, job.code_image);
+            if (r && !restore_rc) restore_rc = r;
+        }
+        if (restore_rc) {
+            quad_poisoned = true;
+            fprintf(stderr, "QUAD_SET_VALID_ERROR valid=%u rc=%d restore_rc=%d: plan poisoned, release it\n",
+                    valid, rc, restore_rc);
+            return -ENOTRECOVERABLE;
+        }
+        fprintf(stderr, "QUAD_SET_VALID_ERROR valid=%u rc=%d write=%zu/%zu: restored valid=%u/%u\n", valid, rc,
+                written + 1, updates.size(), quad_plans[0].valid, quad_plans[1].valid);
+        return rc;
+    }
+    for (auto &u : updates) u.job->code_image.swap(u.image);
+    quad_plans[0].valid = quad_plans[1].valid = valid;
+    printf("QUAD_SET_VALID valid=%u writes=%zu\n", valid, updates.size()); fflush(stdout);
     return 0;
 }
 
@@ -438,6 +493,7 @@ static int quad_arm_final(const QuadPlan &p)
 extern "C" int context_quad_submit2(unsigned slot, int has_prev)
 {
     if (slot > 1) return -EINVAL;
+    if (quad_poisoned) return -ENOTRECOVERABLE;
     if (quad_cross_group ? quad_inflight >= 2 : quad_pending) return -EINVAL;
     if (has_prev && (!quad_cross_group || !quad_plans[slot ^ 1].ready)) return -EINVAL;
     const auto &p = quad_plans[slot];
@@ -594,6 +650,7 @@ extern "C" int context_quad_release()
     for (auto &set : quad_mme) { set.words.clear(); set.engines.clear(); }
     quad_hbm_kt = quad_hbm_v = 0; quad_query_rows = 512;
     quad_head = 0;
+    quad_poisoned = false; quad_test_fail_write = 0; quad_test_fail_restore = 0;
     printf("QUAD_RELEASE ecbs=%u\n", freed); fflush(stdout);
     return 0;
 }

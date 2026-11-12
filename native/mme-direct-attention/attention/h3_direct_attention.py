@@ -228,12 +228,17 @@ class _Plan:
             setattr(self, name, None)
 
     def set_valid(self, valid: int) -> bool:
-        """Switch the prepared TPC programs to another valid key count (nothing may be queued)."""
-        if valid == self.valid:
+        """Switch the prepared TPC programs to another valid key count (nothing may be queued).
+
+        The native update is all-or-nothing (a failed write restores the old code), but this object still forgets
+        its length on any failure: the next call of any length goes to the native side, which is a no-op when the
+        programs already match. On False the caller must not run this plan at `valid`; it prepares a new plan."""
+        if self.valid is not None and valid == self.valid:
             return True
         status = self._set_valid(valid)
         if status:
-            print(f"[h3direct] set_valid({valid}) failed: {status}; rebuilding the plan at this length", flush=True)
+            self.valid = None
+            print(f"[h3direct] set_valid({valid}) failed: {status}; this plan is not used at that length", flush=True)
             return False
         self.valid = valid
         return True

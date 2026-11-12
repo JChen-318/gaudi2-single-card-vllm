@@ -10,6 +10,8 @@ Isolated process, card idle. Needs H3_ATTENTION_OVERLAY = the fixed vllm_gaudi/o
     V = 1. The direct gates must reject both, the output must be 1, the other heads bit-identical to test 1.
  4. max_free_attention with the guard vs the deployed (pre-fix) function: counterexamples (old -> 0, new -> 1)
     and the real layer (must be bit-identical), with timing.
+ 5. automatic key-capacity buckets (H3DIRECT_KEYS=auto).
+ 6. issue #4: injected device-write failures during a valid-length change (restore, and poisoned plan).
 """
 import argparse
 import hashlib
@@ -80,6 +82,7 @@ results["t1_baseline"] = dict(L=L, sha=base_sha, expect=a.expect_sha or None,
 print("ISSUE3 t1 " + json.dumps(results["t1_baseline"]), flush=True)
 
 # 2. Variable valid lengths, then back.
+t2_sha = {}
 for n in [int(x) for x in os.environ.get("ISSUE3_LENGTHS", "37760,37700,28800").split(",")] + [L]:
     if n >= L:
         extra = n - L
@@ -91,6 +94,7 @@ for n in [int(x) for x in os.environ.get("ISSUE3_LENGTHS", "37760,37700,28800").
     o, st = direct(qh, kh, vh)
     wall = time.perf_counter() - t
     row = dict(L=n, wall_s=round(wall, 3), **st)
+    t2_sha[n] = sha(o)
     if n == L:
         row["sha"] = sha(o); row["sha_back_to_baseline"] = row["sha"] == base_sha
     else:
@@ -117,6 +121,43 @@ results["t3_counterexamples_direct"] = dict(
     **st, head0_max_err=float((oc[0, 0].float() - 1).abs().max()), head1_max_err=float((oc[0, 1].float() - 1).abs().max()),
     other_heads_bit_identical=bool(torch.equal(oc[0, 2:], base_out[0, 2:])))
 print("ISSUE3 t3 " + json.dumps(results["t3_counterexamples_direct"]), flush=True)
+
+# 6. Issue #4: a failed valid-length update must leave a consistent plan. Test-only native fault injection
+#    (context_quad_test_fail_write) fails the Nth device write of the next set_valid.
+#    a. 2nd of 4 writes fails (slot 0 exp already rewritten): native restores; the plan forgets its length; L
+#       again needs no rebuild and must give the t1 SHA (it would differ if slot 0 kept the new exp code).
+#    b. same failure with the restore failing too: native poisons the plan (-ENOTRECOVERABLE) and refuses
+#       submits; the next call rebuilds it and must give the t1 SHA.
+#    c. the injected-to length afterwards: same SHA as in test 2.
+T6_LEN = int(os.environ.get("ISSUE4_LENGTH", "37700"))
+if T6_LEN in t2_sha and hd._PLAN is not None and hd._PLAN.valid == L:
+    import ctypes as C
+    inject = hd._PLAN.lib.context_quad_test_fail_write
+    inject.argtypes, inject.restype = [C.c_uint, C.c_int], C.c_int
+    submit_probe = hd._PLAN.lib.context_quad_submit2
+    submit_probe.argtypes, submit_probe.restype = [C.c_uint, C.c_int], C.c_int
+    q6 = tuple(x[:, :, :T6_LEN].contiguous().to("hpu") for x in (Q, K, V))
+    for case, restore_fails in (("a_restored", 0), ("b_poisoned", 1)):
+        plan = hd._PLAN
+        assert plan.valid == L
+        inject(2, restore_fails)
+        ok = plan.set_valid(T6_LEN)
+        row = dict(set_valid_ok=ok, plan_valid_after=plan.valid)
+        row["native_set_valid_L_rc"] = plan._set_valid(L)       # a: 0 (already L, no writes); b: -ENOTRECOVERABLE
+        if row["native_set_valid_L_rc"] == -131:                  # only probe submit when it cannot queue anything
+            row["submit_rc_while_poisoned"] = submit_probe(0, 0)
+        sw = hd.STATS["plan_switches"]
+        o, st = direct(q, k, v)
+        row.update(st, rebuilds=hd.STATS["plan_switches"] - sw, sha_equals_t1=sha(o) == base_sha)
+        results[f"t6_{case}"] = row
+        print("ISSUE4 t6 " + json.dumps({case: row}), flush=True)
+    o, st = direct(*q6)
+    results["t6_c_new_length"] = dict(L=T6_LEN, **st, sha_equals_t2=sha(o) == t2_sha[T6_LEN])
+    print("ISSUE4 t6 " + json.dumps(results["t6_c_new_length"]), flush=True)
+    o, st = direct(q, k, v)
+    results["t6_d_back"] = dict(**st, sha_equals_t1=sha(o) == base_sha)
+    print("ISSUE4 t6 " + json.dumps(results["t6_d_back"]), flush=True)
+    del q6, o
 
 # 5. Automatic key-capacity buckets (H3DIRECT_KEYS=auto): cross every bucket in both directions. A length must
 #    give the same result whatever ran before (37750 -> the t1 SHA again after a rebuild).

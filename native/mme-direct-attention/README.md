@@ -29,6 +29,7 @@
   - 验证：同一服务先后处理 40/607/149/40 token 的提示词，全部走 direct；切回 40 token 时输出与之前逐位相同；607 token 稳态 81.5 s（`attention/evidence/phaseA-buckets-20261111.md`）。
 - 过不了门限的 head 改走带真实行最大值的精确 attention（`exact_attention`），不再交给 MAXFREE。生产 MAXFREE 本身也加了运行时下溢检测：构造的反平行/正交大范数输入原来输出全 0，现在输出 1；真实层输出逐位不变，每层多约 0.3 ms。
 - 证据：`attention/evidence/issue3-fix-20261111.md`；测试 `attention/issue3_test.py`。
+- 长度切换失败的处理（issue #4，2026-11-12）：改写前先生成并检查两个槽的全部程序，写到一半失败就把已写的恢复成原代码，计划保持原长度；连恢复都失败时计划标记为不可用，拒绝提交，下次调用释放并重建。Python 侧失败后不再记住长度，下次一律重新确认。卡上用故障注入验证（`issue3_test.py` t6），CPU 侧有 `attention/issue4_mock_test.py`；证据 `attention/evidence/issue4-set-valid-20261112.md`。
 
 ## 硬件结论（本软件栈 SynapseAI 1.24.1）
 

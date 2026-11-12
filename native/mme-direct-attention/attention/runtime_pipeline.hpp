@@ -132,10 +132,13 @@ static void release_ecb(PreparedEcb &job)
 // Rewrite a prepared ECB's device code in place. The new programs must reproduce the original layout exactly
 // (engine count, every program's offset and size), so the static descriptors in the host metadata stay valid
 // and no pool memory is allocated. The caller guarantees that nothing using the job is queued.
-static int reupload_ecb(unsigned group, const std::vector<std::vector<char>> &programs, PreparedEcb &job)
+// Build the code image a job would hold with these programs, without touching the device. The layout (program
+// count, offsets, sizes, total size) must equal the job's; otherwise -E2BIG and the caller must prepare anew.
+static int stage_ecb_image(unsigned group, const std::vector<std::vector<char>> &programs, const PreparedEcb &job,
+                           std::vector<char> &combined)
 {
+    combined.clear();
     if (!job.code || job.group != group || programs.size() != job.program_sizes.size()) return -EINVAL;
-    std::vector<char> combined;
     for (size_t i = 0; i < programs.size(); ++i) {
         if (!validate_static_program(programs[i], group)) return -EINVAL;
         combined.resize((combined.size() + 63) & ~63u, 0);
@@ -144,23 +147,28 @@ static int reupload_ecb(unsigned group, const std::vector<std::vector<char>> &pr
     }
     combined.resize((combined.size() + 255) & ~255u, 0);
     if (combined.size() != job.code_image.size()) return -E2BIG;
-    if (combined == job.code_image) return 0;
+    return 0;
+}
+
+// Write an image over the job's device code and verify it by readback. Does not change job.code_image; on
+// failure the device code is in an unknown state and the caller must restore it.
+static int write_ecb_image(const PreparedEcb &job, const std::vector<char> &image)
+{
+    if (!job.code || image.size() != job.code_image.size()) return -EINVAL;
     void *staging = nullptr; synStreamHandle upload = nullptr;
-    if (synHostMalloc(0, combined.size(), 0, &staging) != synSuccess ||
-        synStreamCreateGeneric(&upload, 0, 0) != synSuccess) return -ENOMEM;
-    memcpy(staging, combined.data(), combined.size());
-    auto status = synMemCopyAsync(upload, (uintptr_t)staging, combined.size(), job.code_info.device_address, HOST_TO_DRAM);
+    if (synHostMalloc(0, image.size(), 0, &staging) != synSuccess) return -ENOMEM;
+    if (synStreamCreateGeneric(&upload, 0, 0) != synSuccess) { synHostFree(0, staging, 0); return -ENOMEM; }
+    memcpy(staging, image.data(), image.size());
+    auto status = synMemCopyAsync(upload, (uintptr_t)staging, image.size(), job.code_info.device_address, HOST_TO_DRAM);
     if (status == synSuccess) status = synStreamSynchronize(upload);
     if (status == synSuccess) {
-        memset(staging, 0, combined.size());
-        status = synMemCopyAsync(upload, job.code_info.device_address, combined.size(), (uintptr_t)staging, DRAM_TO_HOST);
+        memset(staging, 0, image.size());
+        status = synMemCopyAsync(upload, job.code_info.device_address, image.size(), (uintptr_t)staging, DRAM_TO_HOST);
         if (status == synSuccess) status = synStreamSynchronize(upload);
     }
-    bool equal = status == synSuccess && !memcmp(staging, combined.data(), combined.size());
+    bool equal = status == synSuccess && !memcmp(staging, image.data(), image.size());
     synStreamDestroy(upload); synHostFree(0, staging, 0);
-    if (!equal) return -EIO;
-    job.code_image.swap(combined);
-    return 0;
+    return equal ? 0 : -EIO;
 }
 
 // Clone validated MME programs, rebinding only operand B inside the full

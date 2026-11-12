@@ -29,4 +29,4 @@ docker run --rm --name mme-h3-issue3 --network host --ipc host --cap-add SYS_NIC
     ' bash "$HERE/issue3_test.py" "/mnt/sas/tmp/minimax-h3/qkv/qkv-call1-layer$layer.pt" \
       --expect-sha "${EXPECT_SHA-0b66cf40ed2bbcadd4c19ab94754fdadbd3da34b3ebab445e6cf291061d48138}" \
       >"$HERE/evidence/$log.log" 2>&1
-grep -E 'ISSUE3 |QUAD_SET_VALID|Error|error|Traceback' "$HERE/evidence/$log.log" | cut -c1-600 | tail -20
+grep -E 'ISSUE3 |ISSUE4 |QUAD_SET_VALID|QUAD_RELEASE|Error|error|Traceback' "$HERE/evidence/$log.log" | cut -c1-600 | tail -20
