@@ -41,9 +41,11 @@ class HpuDFlash2Proposer(HpuEagleProposer):
         self.parallel_drafting_hidden_state_tensor = None
         draft_hf_config = self.draft_model_config.hf_config
         dflash_config = draft_hf_config.dflash_config
+        self.is_dspine = bool(dflash_config.get("selected_prefix_code_bridge"))
         self.num_query_per_req = 1 + self.num_speculative_tokens
         self.mask_token_id = int(dflash_config["mask_token_id"])
-        self.selector_top_k = int(dflash_config["selector_top_k"])
+        self.selector_top_k = int(dflash_config.get("selector_top_k", 0) or
+                                  getattr(draft_hf_config, "code_bridge_second_pass", {}).get("head_topk", 0))
         self.use_aux_hidden_state = bool(
             dflash_config.get(
                 "use_aux_hidden_state",
@@ -75,6 +77,11 @@ class HpuDFlash2Proposer(HpuEagleProposer):
     def _create_draft_vllm_config(self):
         """Mirror upstream DFlash attention configuration for the HPU draft."""
         base = super()._create_draft_vllm_config()
+        if self.draft_model_config.hf_config.dflash_config.get("selected_prefix_code_bridge"):
+            # DSpine is BF16 even when the FP8 target uses FP16 activations.
+            model_config = copy.copy(base.model_config)
+            model_config.dtype = torch.bfloat16
+            base = replace(base, model_config=model_config)
         architecture = base.model_config.model_arch_config
         if architecture.is_mm_prefix_lm:
             base.model_config.model_arch_config = replace(architecture, is_mm_prefix_lm=False)
@@ -378,9 +385,12 @@ class HpuDFlash2Proposer(HpuEagleProposer):
             )
             hidden_states = hidden_states.reshape(batch_size, self.num_query_per_req, -1)[:, 1:]
         with runner.profiler.record_event("internal", "dflash2_candidate_selector"):
+            anchors = input_ids[:, 0]
+            if self.is_dspine:
+                hidden_states, anchors = hidden_states.contiguous(), anchors.contiguous()
             selected = self._model_api().select_dflash2_candidates(
                 hidden_states,
-                input_ids[:, 0],
+                anchors,
             )
             return selected[:real_batch_size]
 
@@ -480,9 +490,12 @@ class HpuDFlash2Proposer(HpuEagleProposer):
             hidden_states = hidden_states.reshape(batch_size, self.num_query_per_req, -1)[:, 1:]
         with runner.profiler.record_event("internal", "dflash2_candidate_selector"):
             model_api = self._model_api()
+            anchors = input_ids[:, 0]
+            if self.is_dspine:
+                hidden_states, anchors = hidden_states.contiguous(), anchors.contiguous()
             selected = model_api.select_dflash2_candidates(
                 hidden_states,
-                input_ids[:, 0],
+                anchors,
             )
             return selected[:real_batch_size]
 

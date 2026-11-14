@@ -28,6 +28,8 @@ done
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-qwen3.8-27b-fp8-mtp}
 HOST=${HOST:-127.0.0.1}; PORT=${PORT:-8000}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-262144}; MAX_NUM_SEQS=${MAX_NUM_SEQS:-2}; KV_CACHE_GIB=${KV_CACHE_GIB:-29}
+NUM_SPECULATIVE_TOKENS=${NUM_SPECULATIVE_TOKENS:-7}
+DTYPE=${DTYPE:-auto}
 DATA_DIR=${DATA_DIR:-$HOME/.cache/gaudi2-single-card-vllm}
 GENERATION_CONFIG=${GENERATION_CONFIG:-'{"temperature":1.0,"top_p":0.95,"top_k":20}'}
 PY=${PYTHON:-$( [ -f "$ROOT/.python" ] && cat "$ROOT/.python" || echo python3.12 )}
@@ -69,7 +71,13 @@ LIBHASH=$(cat "$SAMPLING_KERNELS" "$FI_KERNELS" "$SHIM" ${GDN_TPC_LIBS:+"$QWEN4E
 RUN=$DATA_DIR/run; RECIPES=$DATA_DIR/recipe-cache-$LIBHASH
 mkdir -p "$RUN" "$RECIPES" "$DATA_DIR/logs" "$DATA_DIR/habana-logs" "$DATA_DIR/torch-cache"
 # Runtime switches read by the engine (all on = the measured configuration)
-echo '{"lookahead": true, "fast_topk": true, "presample": true, "delta": true, "predraft": true, "guard_skip": true, "rng_pool": true, "early_readback": true}' > "$RUN/control.json"
+CONTROL_DEFAULTS='{"lookahead": true, "fast_topk": true, "presample": true, "delta": true, "predraft": true, "guard_skip": true, "rng_pool": true, "early_readback": true}'
+case "${SPEC_FAST_PATHS:-1}" in
+  0) CONTROL_DEFAULTS=${CONTROL_DEFAULTS//true/false} ;;
+  1) ;;
+  *) echo 'SPEC_FAST_PATHS must be 0 or 1'; exit 1 ;;
+esac
+printf '%s\n' "$CONTROL_DEFAULTS" > "$RUN/control.json"
 echo '{"cpu_inputs": true, "context_region": true}' > "$RUN/decode-control.json"
 echo '{"handoff": true, "sampling_cache": true, "draft_inputs": true, "packed_copies": false}' > "$RUN/host-control.json"
 
@@ -201,13 +209,14 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   "$PY" -m vllm.entrypoints.cli.main serve "$TARGET_MODEL"
   --served-model-name "$SERVED_MODEL_NAME"
   --tensor-parallel-size 1 --pipeline-parallel-size 1
+  --dtype "$DTYPE"
   --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAX_NUM_SEQS"
   --kv-cache-memory-bytes $((KV_CACHE_GIB * 1024 * 1024 * 1024)) --kv-cache-dtype fp8_inc
   --override-generation-config "$GENERATION_CONFIG"
   --enable-auto-tool-choice --tool-call-parser qwen3_xml
   --middleware dflash2_request_guard.DFlash2RequestGuard
   --host "$HOST" --port "$PORT"
-  --speculative-config "{\"method\":\"dflash\",\"model\":\"$DRAFT_MODEL\",\"num_speculative_tokens\":7}"
+  --speculative-config "{\"method\":\"dflash\",\"model\":\"$DRAFT_MODEL\",\"num_speculative_tokens\":$NUM_SPECULATIVE_TOKENS}"
   "${ARGS[@]}")
 
 cd "$ROOT/vllm-gaudi"

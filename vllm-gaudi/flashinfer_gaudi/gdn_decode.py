@@ -472,6 +472,44 @@ def _gated_delta_rule_mtp_fused(
     return output.to(packed_qkv.dtype), state_pool
 
 
+def _gated_delta_rule_mtp_fused16(
+    packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+    assume_distinct_checkpoints=False, checkpoint_start=None,
+):
+    """Compose two functional T8 kernels while retaining all T16 checkpoints."""
+    native = public_mtp_fused_op()
+    if native is None:
+        raise BackendUnavailableError("The fused MTP kernel is not loaded")
+    batch, tokens, _ = packed_qkv.shape
+    if tokens != 16:
+        raise ValueError("DSpine fused verification requires 16 query tokens")
+    if checkpoint_start is not None and (not assume_distinct_checkpoints or checkpoint_start < 1
+                                        or checkpoint_start + batch * tokens > state_pool.shape[0]):
+        raise ValueError("Direct checkpoints require valid, distinct contiguous destinations")
+    offsets = num_accepted_tokens.long().clamp(1, tokens) - 1
+    loads = state_indices.gather(1, offsets.unsqueeze(1)).squeeze(1).long()
+    source = state_pool.index_select(0, loads)
+    slots = torch.arange(batch, dtype=state_indices.dtype, device=state_indices.device)
+    slots = slots.unsqueeze(1).expand(batch, 8).contiguous()
+    accepted = torch.ones_like(num_accepted_tokens).reshape(batch)
+    first, first_states = native(source, packed_qkv[:, :8].contiguous(), log_decay[:, :8].contiguous(),
+                                 beta[:, :8].contiguous(), slots, accepted)
+    second, second_states = native(first_states[:, -1].contiguous(), packed_qkv[:, 8:].contiguous(),
+                                   log_decay[:, 8:].contiguous(), beta[:, 8:].contiguous(), slots, accepted)
+    checkpoints = torch.cat((first_states, second_states), dim=1)
+    flat = checkpoints.reshape(-1, *state_pool.shape[1:])
+    # Do not overwrite any previous-round checkpoint until both chunks have
+    # consumed the selected initial state. Repeated slots keep ordered writes.
+    if checkpoint_start is not None:
+        state_pool.narrow(0, checkpoint_start, batch * tokens).copy_(flat)
+    elif assume_distinct_checkpoints:
+        state_pool.index_copy_(0, state_indices.reshape(-1).long(), flat)
+    else:
+        for token in range(tokens):
+            state_pool.index_copy_(0, state_indices[:, token].long(), checkpoints[:, token])
+    return torch.cat((first, second), dim=1).to(packed_qkv.dtype), state_pool
+
+
 def gated_delta_rule_mtp_packed(
     packed_qkv: torch.Tensor,
     log_decay: torch.Tensor,
@@ -525,7 +563,7 @@ def gated_delta_rule_mtp_packed(
     is_hpu = _device_is_hpu(packed_qkv)
     expected_scale = state_pool.shape[-1]**-0.5
     native_supported = (is_hpu and packed_qkv.dtype == torch.bfloat16 and 0 < batch <= _QWEN38_MTP_MAX_BATCH
-                        and tokens == _QWEN38_MTP_TOKENS and packed_qkv.shape[2] == _QWEN38_MTP_PACKED_WIDTH
+                        and tokens in (_QWEN38_MTP_TOKENS, 16) and packed_qkv.shape[2] == _QWEN38_MTP_PACKED_WIDTH
                         and state_pool.dtype == torch.float32 and state_pool.shape[0] > 0
                         and tuple(state_pool.shape[1:]) == (_QWEN38_MTP_VALUE_HEADS, _QWEN38_MTP_DIM, _QWEN38_MTP_DIM)
                         and log_decay.dtype == torch.float32
@@ -538,6 +576,14 @@ def gated_delta_rule_mtp_packed(
         raise BackendUnavailableError(f"The {policy} backend does not provide complete DFlash2 MTP GDN verification.")
     if (policy != "pytorch" and mtp_prepared_enabled() and torch.compiler.is_compiling() and native_supported
             and batch <= _MTP_PREPARED_MAX_BATCH and assume_full_query):
+        if tokens == 16:
+            if mtp_fused_enabled() and public_mtp_fused_op() is not None:
+                return _gated_delta_rule_mtp_fused16(
+                    packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+                    assume_distinct_checkpoints, checkpoint_start)
+            return _gated_delta_rule_mtp_packed_reference(
+                packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+                query_lengths, scale, use_qk_l2norm, assume_full_query)
         if _MTP_TRACE_ENABLED:
             logging.getLogger("vllm").info(
                 "PROBE-MTP [ENGAGED] prepared B1/T8 kernel  policy=%s batch=%d tokens=%d full_query=%s",
@@ -561,7 +607,7 @@ def gated_delta_rule_mtp_packed(
     # graph. Explicit ``public`` remains available for kernel qualification.
     use_public = policy == "public" or (policy == "auto" and not torch.compiler.is_compiling()
                                         and batch >= _QWEN38_MTP_MIN_AUTO_BATCH and public_mtp_gdn_auto_promoted())
-    if use_public and native_supported:
+    if use_public and native_supported and tokens == _QWEN38_MTP_TOKENS:
         native = public_mtp_gdn_op()
         if native is not None:
             result = native(

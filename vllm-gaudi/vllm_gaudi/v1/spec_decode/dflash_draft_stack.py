@@ -24,6 +24,8 @@ class HpuDFlashDraftStack(torch.nn.Module):
 
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         inner = self._inner
+        if hasattr(inner, "forward_dspine"):
+            return inner.forward_dspine(input_ids, positions)
         hidden_states = inner.embed_input_ids(input_ids)
         residual = None
         for layer in inner.layers:

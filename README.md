@@ -22,6 +22,11 @@ A source snapshot combining vLLM, the Gaudi hardware plugin, and native kernels 
 
 This is a community engineering snapshot, independent of Intel and the official vLLM releases.
 
+An experimental [DSpine backend](docs/DSPINE.md) supports the Tencent
+Qwen3.8-27B BF16 draft, including adjacent feature writes, serial last-write
+refinement, and 8/16-token verification blocks. See its configuration and
+validation requirements before selecting it in place of the default DFlash2.
+
 ## Benchmarks
 
 ### Six workloads, nine prompt lengths

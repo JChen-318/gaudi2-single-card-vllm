@@ -1866,6 +1866,8 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
 
     def select_dflash2_candidates(self, hidden_states, anchor_token_ids):
         """Generate, score, and select a DFlash2 path in one HPU region."""
+        if hasattr(self.model, "select_dspine_candidates"):
+            return self.model.select_dspine_candidates(hidden_states, anchor_token_ids)
         from flashinfer_gaudi.dflash2 import select_path
 
         batch_size, num_steps, _ = hidden_states.shape
@@ -2177,6 +2179,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             self._compile_timers = kiro_v11.CompileTimers()
             self._compile_timers.install()
         self._draft_profiler = None
+        draft_hf = getattr(getattr(self.speculative_config, 'draft_model_config', None), 'hf_config', None)
+        is_dspine = bool((getattr(draft_hf, 'dflash_config', None) or {}).get('selected_prefix_code_bridge'))
         self._dflash_lookahead = (kiro_v6.DFlashLookahead(
             self, gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE, gaudi_envs.VLLM_HPU_V6_PROFILE_PREP,
             gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA_VERIFY if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA else None,
@@ -2184,6 +2188,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             16 if gaudi_envs.VLLM_HPU_DFLASH2_EARLY_READBACK else None)
                                   if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD
                                   and self.speculative_config is not None and self.speculative_config.use_dflash()
+                                  # DSpine's packed refinement state is not qualified for
+                                  # lookahead/predraft reuse; use normal verification.
+                                  and self.speculative_config.num_speculative_tokens == 7
+                                  and not is_dspine
                                   else None)
         self.observability_config = vllm_config.observability_config
         self.is_driver_worker = is_driver_worker
@@ -2811,7 +2819,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         full_query: bool = False,
     ) -> bool:
         if (self._direct_gdn_state_enabled and getattr(self, "_direct_dflash_checkpoints_enabled", False)
-                and self._compact_gdn_enabled and not self.use_prefix_caching and tokens_per_request == 8):
+                and self._compact_gdn_enabled and not self.use_prefix_caching and tokens_per_request in (8, 16)):
             return has_contiguous_dflash_checkpoints(
                 state_indices,
                 self._compact_gdn_group_offset,
@@ -7741,7 +7749,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                         logger.info("DFlash2 drafter regions use static-shape compilation")
                     elif (gaudi_envs.VLLM_HPU_DFLASH2_DRAFT_STACK and self.speculative_config.use_dflash()):
                         from vllm_gaudi.v1.spec_decode.dflash_draft_stack import install_draft_stack
-                        install_draft_stack(self.drafter.model, self._compile)
+                        is_dspine = hasattr(self.drafter.model.model, 'select_dspine_candidates')
+                        compile_draft = partial(self._compile, static_shapes=is_dspine)
+                        install_draft_stack(self.drafter.model, compile_draft)
                         logger.info("DFlash2 draft embedding, layers and norm compiled as one region")
                     else:
                         self._regional_compilation(self.drafter.model)
@@ -7833,6 +7843,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             if method is not None:
                 if method_name == 'compute_mtp_step' and gaudi_envs.VLLM_HPU_SPEC_OPTIMIZATION:
                     setattr_nested(model, method_name, self._compile_spec_tensor_region(method))
+                elif (method_name in ('compute_candidates', 'select_dflash2_candidates')
+                      and hasattr(getattr(model, 'model', None), 'select_dspine_candidates')):
+                    setattr_nested(model, method_name, self._compile(method, static_shapes=True))
                 else:
                     self._compile_region(model, method_name, method)
 
@@ -7978,10 +7991,12 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         module = self._compile(module)
         setattr_nested(model, name, module)
 
-    def _compile(self, module):
+    def _compile(self, module, *, static_shapes=False):
         if gaudi_envs.VLLM_HPU_UNIQUE_COMPILE_CODE:
             module = kiro_v6.with_private_code(module)
-        compiled = torch.compile(module, **self.compile_config.get_compile_args())
+        config = (HPUCompileConfig(fullgraph=self.compile_config.fullgraph, dynamic=False)
+                  if static_shapes else self.compile_config)
+        compiled = torch.compile(module, **config.get_compile_args())
         if getattr(self, '_guard_skip', None) is not None:
             compiled = kiro_v11.protect(compiled, self._guard_skip)
         return compiled
@@ -10591,7 +10606,8 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         from vllm_gaudi.v1.spec_decode.hpu_dflash2 import HpuDFlash2Proposer
 
         drafter = self.drafter
-        if not isinstance(drafter, HpuDFlash2Proposer) or not starts or len(starts) > padded:
+        if (not isinstance(drafter, HpuDFlash2Proposer) or getattr(drafter, 'is_dspine', False)
+                or not starts or len(starts) > padded):
             return None
         defragmenter = getattr(self, 'defragmenter', None)
         if defragmenter is not None and getattr(defragmenter, 'enabled', False):

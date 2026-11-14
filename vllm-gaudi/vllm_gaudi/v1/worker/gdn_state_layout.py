@@ -24,7 +24,8 @@ def has_contiguous_dflash_checkpoints(
     if state_indices.device.type != "cpu":
         raise ValueError("Checkpoint ownership must be validated on CPU metadata.")
     if (not full_query or not group_offsets or active_requests < 1 or active_requests != padded_requests
-            or active_requests > request_capacity or tokens_per_request != 8 or slots_per_request != tokens_per_request
+            or active_requests > request_capacity or tokens_per_request not in (8, 16)
+            or slots_per_request != tokens_per_request
             or state_indices.ndim != 3 or state_indices.shape[1:] != (padded_requests, tokens_per_request)):
         return False
     offsets = list(group_offsets.values())

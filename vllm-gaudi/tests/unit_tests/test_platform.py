@@ -266,6 +266,68 @@ def test_qwen38_dflash2_exact_qualification_contract_passes():
         _validate_hpu_dflash2_config(config)
 
 
+def _qwen38_dspine_vllm_config():
+    config = _qwen38_dflash2_vllm_config()
+    spec = config.speculative_config
+    spec.num_speculative_tokens = 15
+    spec.draft_model_config.architectures = ["DFlashDraftModel"]
+    draft = spec.draft_model_config.hf_config
+    draft.sliding_window = 8192
+    draft.is_causal = True
+    draft.block_size = 16
+    draft.code_bridge_second_pass = {"mode": "serial_table", "first_exact": 4, "head_topk": 16}
+    draft.dflash_config = {
+        "mask_token_id": 248070, "target_layer_ids": [1, 16, 31, 46, 61],
+        "draft_block_causal": True, "selected_prefix_terminal": False,
+        "selected_prefix_feature_write_mode": "independent", "selected_prefix_feature_writes": True,
+        "selected_prefix_feature_layers": [1, 2, 3, 4, 5],
+        "selected_prefix_code_bridge": {"code_size": 1024, "eps": 1e-6, "kappa": 10.0, "rank": 512},
+        "selected_prefix_last_write_refine": {"head_topk": 16, "kind": "exact_sender", "version": 1, "weight": 1.0},
+    }
+    config.model_config.dtype = torch.bfloat16
+    config.scheduler_config.max_num_seqs = 2
+    return config
+
+
+@pytest.mark.parametrize("tokens", [7, 15])
+def test_qwen38_dspine_qualification_accepts_trained_block_prefix(tokens):
+    config = _qwen38_dspine_vllm_config()
+    config.speculative_config.num_speculative_tokens = tokens
+    with mock.patch.dict(os.environ, {"VLLM_HPU_FLASHINFER_GDN": "1", "VLLM_HPU_FLASHINFER_DFLASH2": "1",
+                                     "VLLM_COMPACT_GDN": "1"}):
+        _validate_hpu_dflash2_config(config)
+
+
+@pytest.mark.parametrize("field,value,error", [
+    ("dtype", torch.float32, "FP16 or BF16"),
+    ("num_speculative_tokens", 16, "7 or 15"),
+    ("max_num_seqs", 9, "max_num_seqs"),
+    ("enable_prefix_caching", True, "prefix"),
+    ("target_layer_ids", [5, 19, 33, 47, 61], "target_layer_ids"),
+])
+def test_qwen38_dspine_rejects_incompatible_state_or_checkpoint(field, value, error):
+    config = _qwen38_dspine_vllm_config()
+    destinations = {"dtype": config.model_config, "num_speculative_tokens": config.speculative_config,
+                    "max_num_seqs": config.scheduler_config, "enable_prefix_caching": config.cache_config}
+    if field == "target_layer_ids":
+        config.speculative_config.draft_model_config.hf_config.dflash_config[field] = value
+    else:
+        setattr(destinations[field], field, value)
+    with mock.patch.dict(os.environ, {"VLLM_HPU_FLASHINFER_GDN": "1", "VLLM_HPU_FLASHINFER_DFLASH2": "1",
+                                     "VLLM_COMPACT_GDN": "1"}), pytest.raises(ValueError, match=error):
+        _validate_hpu_dflash2_config(config)
+
+
+def test_qwen38_dspine_preserves_fp16_target_and_selects_bf16_draft():
+    config = _qwen38_dspine_vllm_config()
+    config.model_config.dtype = torch.float16
+    with mock.patch.dict(os.environ, {"VLLM_HPU_FLASHINFER_GDN": "1", "VLLM_HPU_FLASHINFER_DFLASH2": "1",
+                                     "VLLM_COMPACT_GDN": "1"}):
+        _validate_hpu_dflash2_config(config)
+    assert config.model_config.dtype == torch.float16
+    assert config.speculative_config.draft_model_config.dtype == torch.bfloat16
+
+
 def test_qwen38_dflash2_rejects_unqualified_selector_shape():
     config = _qwen38_dflash2_vllm_config()
     config.speculative_config.draft_model_config.hf_config.dflash_config["selector_top_k"] = 8

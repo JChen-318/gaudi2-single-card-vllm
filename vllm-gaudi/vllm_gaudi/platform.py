@@ -150,17 +150,43 @@ def _validate_hpu_dflash2_config(vllm_config: VllmConfig) -> None:
     if draft_model_config is None:
         raise ValueError("HPU DFlash2 requires an explicit draft model checkpoint")
     architectures = set(getattr(draft_model_config, "architectures", ()) or ())
-    if "DFlash2DraftModel" not in architectures:
+    draft_hf_config = getattr(draft_model_config, "hf_config", None)
+    dflash_config = getattr(draft_hf_config, "dflash_config", None) or {}
+    is_dspine = "DFlashDraftModel" in architectures and bool(dflash_config.get("selected_prefix_code_bridge"))
+    if "DFlash2DraftModel" not in architectures and not is_dspine:
         raise ValueError("The HPU DFlash backend currently supports only DFlash2DraftModel checkpoints")
-    if speculative_config.num_speculative_tokens != 7:
+    if is_dspine and speculative_config.num_speculative_tokens not in (7, 15):
+        raise ValueError("HPU DSpine supports 7 or 15 speculative tokens (8/16-token blocks)")
+    if not is_dspine and speculative_config.num_speculative_tokens != 7:
         raise ValueError("HPU DFlash2 currently requires exactly 7 speculative tokens (an 8-token verify block)")
     if not is_qwen3_5_hybrid_model(vllm_config.model_config):
         raise ValueError("HPU DFlash2 currently supports Qwen3.8/Qwen3.5 hybrid targets only")
 
-    draft_hf_config = getattr(draft_model_config, "hf_config", None)
-    draft_mismatches = _config_field_mismatches(draft_hf_config, _QWEN38_DFLASH2_DRAFT_FIELDS)
-    dflash_config = getattr(draft_hf_config, "dflash_config", None) or {}
-    draft_mismatches.extend(_config_field_mismatches(dflash_config, _QWEN38_DFLASH2_HEAD_FIELDS))
+    draft_fields = dict(_QWEN38_DFLASH2_DRAFT_FIELDS)
+    head_fields = dict(_QWEN38_DFLASH2_HEAD_FIELDS)
+    if is_dspine:
+        draft_fields.update(sliding_window=8192, is_causal=True, block_size=16)
+        head_fields = {
+            "mask_token_id": 248070, "target_layer_ids": (1, 16, 31, 46, 61),
+            "draft_block_causal": True, "selected_prefix_terminal": False,
+            "selected_prefix_feature_write_mode": "independent", "selected_prefix_feature_writes": True,
+            "selected_prefix_feature_layers": (1, 2, 3, 4, 5),
+            "selected_prefix_code_bridge": {"code_size": 1024, "eps": 1e-6, "kappa": 10.0, "rank": 512},
+            "selected_prefix_last_write_refine": {"head_topk": 16, "kind": "exact_sender", "version": 1, "weight": 1.0},
+        }
+        if vllm_config.model_config.dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError("HPU DSpine requires an FP16 or BF16 target activation dtype")
+        draft_model_config.dtype = torch.bfloat16
+        if getattr(draft_hf_config, "code_bridge_second_pass", None) != {
+                "mode": "serial_table", "first_exact": 4, "head_topk": 16}:
+            raise ValueError("HPU DSpine requires the checkpoint's serial last-write refinement")
+        if any(dflash_config.get(key) for key in ("conv_kernel_size", "selector_rank",
+                                                  "selected_prefix_terminal_residual_rank")):
+            raise ValueError("Unsupported DSpine convolution, selector or terminal residual")
+        if vllm_config.cache_config.enable_prefix_caching:
+            raise ValueError("HPU DSpine currently requires --no-enable-prefix-caching")
+    draft_mismatches = _config_field_mismatches(draft_hf_config, draft_fields)
+    draft_mismatches.extend(_config_field_mismatches(dflash_config, head_fields))
     if draft_mismatches:
         raise ValueError("HPU DFlash2 is currently qualified only for the official Qwen3.8-27B-DFlash2 shape; " +
                          "; ".join(draft_mismatches))
@@ -173,6 +199,8 @@ def _validate_hpu_dflash2_config(vllm_config: VllmConfig) -> None:
     if target_mismatches:
         raise ValueError("HPU DFlash2 is currently qualified only for the Qwen3.8-27B target shape; " +
                          "; ".join(target_mismatches))
+    if is_dspine and vllm_config.scheduler_config.max_num_seqs > 8:
+        raise ValueError("HPU DSpine supports max_num_seqs <= 8 (up to 128 rollback checkpoints per layer)")
     if vllm_config.scheduler_config.max_num_seqs > 16:
         raise ValueError("HPU DFlash2 currently requires max_num_seqs <= 16 because each active request reserves "
                          "eight rollback checkpoints per GDN layer")

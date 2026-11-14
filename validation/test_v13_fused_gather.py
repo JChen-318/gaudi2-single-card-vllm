@@ -93,3 +93,28 @@ def test_gather_is_on_by_default(monkeypatch):
     monkeypatch.delenv("FLASHINFER_GAUDI_MTP_FUSED_GATHER", raising=False)
     from flashinfer_gaudi._config import mtp_fused_gather_enabled
     assert mtp_fused_gather_enabled()
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+@pytest.mark.parametrize("accepted_value", [0, 1, 8, 9, 16, 19])
+@pytest.mark.parametrize("direct", [False, True])
+def test_dspine_two_fused_blocks_preserve_full_rollback_lattice(monkeypatch, batch, accepted_value, direct):
+    """Loads beyond checkpoint 8 must survive before either block writes back."""
+    monkeypatch.setattr(gdn, "public_mtp_fused_op", lambda: fake_fused)
+    gen = torch.Generator().manual_seed(81)
+    pool = torch.randn(40, HV, D, D, generator=gen) * 0.05
+    packed = torch.randn(batch, 16, 2 * H * D + HV * D, generator=gen).bfloat16()
+    decay = -torch.rand(batch, 16, HV, generator=gen) * 0.5
+    beta = torch.rand(batch, 16, HV, generator=gen).bfloat16()
+    slots = torch.randperm(39, generator=gen)[:batch * 16].add(1).reshape(batch, 16).int()
+    if direct:
+        slots = torch.arange(1, batch * 16 + 1, dtype=torch.int32).reshape(batch, 16)
+    accepted = torch.full((batch,), accepted_value, dtype=torch.int32)
+    lengths = torch.full((batch,), 16, dtype=torch.int32)
+    expected, expected_pool = gdn._gated_delta_rule_mtp_packed_reference(
+        packed, decay, beta, pool.clone(), slots, accepted, lengths, assume_full_query=True)
+    actual, actual_pool = gdn._gated_delta_rule_mtp_fused16(
+        packed, decay, beta, pool.clone(), slots, accepted, assume_distinct_checkpoints=True,
+        checkpoint_start=1 if direct else None)
+    torch.testing.assert_close(actual, expected, rtol=0.02, atol=0.008)
+    torch.testing.assert_close(actual_pool, expected_pool, rtol=3e-5, atol=1e-6)
