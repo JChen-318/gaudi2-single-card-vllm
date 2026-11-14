@@ -827,6 +827,12 @@ def _get_all(data, *keys):
     return [data.get(k, None) for k in keys]
 
 
+# Synapse rejects the concat of the gathered past with the current block in the DSpine draft
+# attention ("unsupported node for hardware") when the draft runs queued behind the target's
+# sampling. Writing both parts into one new buffer produces the same tensor and lowers cleanly.
+_PAST_CONCAT_COPY = os.environ.get('VLLM_HPU_PAST_CONCAT_COPY', '0') == '1'
+
+
 def _include_past(tensor_str, fn_str, cache_str, scales_str, args):
     all_tensors = _get_all(args, tensor_str, fn_str, cache_str, scales_str, 'block_list', 'block_size')
     current, fn, cache, scales, block_list, block_size = all_tensors
@@ -842,7 +848,13 @@ def _include_past(tensor_str, fn_str, cache_str, scales_str, args):
             scales_uf = None
         past = fn(cache.unflatten(0, (-1, block_size)), **get_kv_fetch_extra_args(blocks=block_list, scales=scales_uf))
         past = past.reshape(current.size(0), -1, past.shape[2], past.shape[3])
-        current = torch.concat((past, current), dim=1)
+        if _PAST_CONCAT_COPY:
+            joined = past.new_empty((current.size(0), past.size(1) + current.size(1), *current.shape[2:]))
+            joined[:, :past.size(1)].copy_(past)
+            joined[:, past.size(1):].copy_(current)
+            current = joined
+        else:
+            current = torch.concat((past, current), dim=1)
         args[tensor_str] = current
 
 

@@ -46,9 +46,36 @@ prefix caching disabled, and at most 8 concurrent sequences. Other draft/target
 shapes are rejected. The existing DFlash2 configuration remains the default.
 The example uses `SPEC_FAST_PATHS=1` to enable supported sampling and host
 shortcuts. Set it to `0` to disable the runtime shortcuts for diagnosis.
-Host lookahead and its presampling/predraft reuse are disabled for DSpine.
-Both block sizes use normal target verification: enabling the original
-lookahead pipeline caused an HPU runtime concat error during qualification.
+
+`DSPINE=1` turns on the three things a DSpine block needs beyond the DFlash2
+pipeline (measured in section 25 of [the optimization notes](OPTIMIZATION.md)):
+
+- the host lookahead and presampling that queue the next round's target
+  forward before the current round returns, and the predraft that queues the
+  next draft behind sampling. Both were written for DFlash2 and work for any
+  block length; they only needed their `num_speculative_tokens == 7` gate
+  removed.
+- `VLLM_HPU_PAST_CONCAT_COPY=1`. With the draft queued behind the target's
+  sampling, Synapse rejects the draft attention's concat of the gathered past
+  with the current block ("unsupported node for hardware"). Writing both parts
+  into one new buffer is the same tensor and lowers cleanly.
+- the native T=1 rejection correction at 16 draft positions. Its TPC kernels
+  read the width from their tensors; only the glue and the Python gate were
+  capped at 8. Without this a sampled request falls back to the eager
+  reference, which costs about 6 ms per round.
+
+Measured warm, single-request decode (one card, `--skip-warmup`, six
+workloads at temperature 0 and 1, `tools/benchmark_dspine_decode.py`):
+
+| draft | tokens/round | ms/round | tok/s | harmonic mean |
+|---|---|---|---|---|
+| DFlash2, `K=7` | 4.16 | 26.2 | 158.6 | 157.7 |
+| DSpine b16, `K=15`, `DSPINE=1` | 4.85 | 28.4 | 170.6 | 170.7 |
+
+Per workload DSpine runs 12-23% faster on code and Chinese and 7-11% slower
+on English prose, where its accepted length varies most between runs. Accepted
+length moves 5-10% from run to run, so a single run of either draft does not
+settle a difference of that size.
 
 The native GDN verify kernel is specialized for 8-token blocks. A full
 16-token verification composes two functional 8-token kernel calls: the second

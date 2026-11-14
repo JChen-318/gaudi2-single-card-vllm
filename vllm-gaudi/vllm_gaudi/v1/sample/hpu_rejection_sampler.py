@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from vllm.v1.sample import rejection_sampler
 from vllm.v1.sample.logits_processor.builtin import MinTokensLogitsProcessor
@@ -11,6 +13,12 @@ from vllm_gaudi.v1.spec_decode.mtp_phase_profile import profile_stage
 
 PLACEHOLDER_TOKEN_ID = rejection_sampler.PLACEHOLDER_TOKEN_ID
 GREEDY_TEMPERATURE = rejection_sampler.GREEDY_TEMPERATURE
+
+
+# The native correction kernels read the draft width from their tensors and accept up to 16
+# positions; this gate stays at 8, the width DFlash2 qualified, and serve.sh raises it to 16
+# for a DSpine block (K=15). Above it, correction falls back to the eager reference.
+_NATIVE_CORRECTION_MAX_WIDTH = int(os.environ.get('VLLM_HPU_NATIVE_CORRECTION_MAX_WIDTH', '8'))
 
 
 def _dflash2_greedy_fastpath_supported(sampling_metadata: SamplingMetadata, ) -> bool:
@@ -336,7 +344,8 @@ def rejection_random_sample_pytorch(
         if (device.type == 'hpu' and gaudi_envs.VLLM_HPU_NATIVE_CORRECTION
                 and sampling_metadata.all_random and draft_probs is None
                 and not synthetic_mode and not use_fp64_gumbel
-                and batch_size <= 16 and 1 <= width <= 8 and 64 <= vocab_size <= 1048576
+                and batch_size <= 16 and 1 <= width <= _NATIVE_CORRECTION_MAX_WIDTH
+                and 64 <= vocab_size <= 1048576
                 and all(0 <= length <= width for length in num_draft_tokens)):
             from vllm_gaudi.v1.sample.native_correction import apply_native_correct
             return apply_native_correct(padded_draft_token_ids.reshape(batch_size, width),

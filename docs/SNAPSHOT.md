@@ -66,3 +66,7 @@
 `vllm-gaudi/vllm_gaudi/` 下 45 个文件按服务器现用 v19 镜像更新（13 个修改、32 个新增），均与容器内 `/opt` 中的字节核对过 SHA-256。来源是 PR #1（Qwen4Exp，`models/qwen4exp/`、`models/qwen4_exp.py`、`ops/modelopt_csf.py`、`ops/nvfp4_tpc_layout.py` 等）、随后的兼容修复（`models/qwen4exp/_gc_kernel_path.py`、`gdn_h14.py`、新增 `habana_compat.py`），以及 [优化说明](OPTIMIZATION.md) 第 22 节的 prefill 改动（`extension/prefill_split_attn.py`）。清单中的哈希与 `captured_at_utc` 已同步。
 
 PR #1 带来的其余源码不在快照清单中，也没有部署到 27B 服务：`vllm-gaudi/csrc/qwen4exp/`、`native/qwen4exp-nvfp4-moe/`、`tools/qwen4exp_flashnext/`、`validation/qwen4exp/` 和 `vllm-gaudi/tests/` 下的新测试。
+
+## 2026-11-14 更新（DSpine）
+
+新增 `vllm-gaudi/vllm_gaudi/models/dspine.py`、`ops/dspine.py` 和 `vllm-gaudi/tests/models/dspine/README.md`，修改 `flashinfer_gaudi/gdn_decode.py`、`vllm_gaudi/platform.py`、`models/__init__.py`、`v1/spec_decode/hpu_dflash2.py`、`dflash_draft_stack.py`、`v1/worker/hpu_model_runner.py`、`gdn_state_layout.py`、`extension/ops.py`、`v1/sample/hpu_rejection_sampler.py` 和两个单元测试，对应 [DSpine 说明](DSPINE.md) 与[优化说明](OPTIMIZATION.md)第 25 节。`native/mtp-sampling/host.cpp`、`op.cpp` 的草稿宽度上限从 8 放宽到 16（内核本身未改）。清单中这些文件的哈希与 `captured_at_utc` 已同步。

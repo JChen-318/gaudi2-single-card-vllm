@@ -37,7 +37,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* p,HabanaKerne
         return GLUE_INCOMPATIBLE_DATA_TYPE;
     const auto v=prob.geometry.maxSizes[0], w=prob.geometry.maxSizes[1], b=prob.geometry.maxSizes[2];
     const auto tiles=(v+1023)/1024;
-    if(v<64 || v>1048576 || w<1 || w>8 || b<1 || b>16 ||
+    if(v<64 || v>1048576 || w<1 || w>16 || b<1 || b>16 ||
        p->inputTensors[1].geometry.maxSizes[0]!=w || p->inputTensors[1].geometry.maxSizes[1]!=b ||
        p->inputTensors[2].geometry.maxSizes[0]!=b ||
        p->inputTensors[3].geometry.maxSizes[0]!=w || p->inputTensors[3].geometry.maxSizes[1]!=b)

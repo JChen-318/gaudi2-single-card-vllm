@@ -26,7 +26,7 @@ bool registration() {
 const bool registered=registration();
 void validate(const at::Tensor& p,const at::Tensor& d,const at::Tensor& c,const at::Tensor& u) {
     TORCH_CHECK(p.dim()==3 && p.scalar_type()==at::kFloat && p.is_contiguous());
-    TORCH_CHECK(p.size(0)>=1 && p.size(0)<=16 && p.size(1)>=1 && p.size(1)<=8 && p.size(2)>=64 && p.size(2)<=1048576);
+    TORCH_CHECK(p.size(0)>=1 && p.size(0)<=16 && p.size(1)>=1 && p.size(1)<=16 && p.size(2)>=64 && p.size(2)<=1048576);
     TORCH_CHECK(d.sizes()==p.sizes().slice(0,2) && d.scalar_type()==at::kInt && d.is_contiguous());
     TORCH_CHECK(c.dim()==1 && c.size(0)==p.size(0) && c.scalar_type()==at::kInt && c.is_contiguous());
     TORCH_CHECK(u.sizes()==d.sizes() && u.scalar_type()==at::kFloat && u.is_contiguous());

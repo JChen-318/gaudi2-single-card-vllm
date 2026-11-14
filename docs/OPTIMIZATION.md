@@ -913,3 +913,31 @@ DiT 一次前向 trace（正式路径，20.10 s）：注意力 16.8 s（含三�
 1024² 文生图：HTTP 请求 6.5–7.5 s → 4.4 s，服务端 3.59 s（DiT 3 步约 0.32 s/步）。1536² 17.0 s，2048² 41.6 s，图像编辑 7.0 s。
 
 在线 FP8（需要先 import `vllm_gaudi.ops.hpu_fp8` 注册 HPU 方法）：1024² 服务端 3.59 → 3.2 s（-11%），但文生图同种子 PSNR 只有 17–26 dB，构图会变；跳过 `re:.*img_mlp.*` 后 3.49 s，差异仍大。不开。
+
+## 25. DSpine 16 token 块：让 DFlash2 的流水线也服务于它
+
+DSpine 草稿每轮接受的 token 比 DFlash2 多（4.85 vs 4.16），但移植完成时每轮 40.7 ms，只有 122 tok/s，比 DFlash2 的 158 tok/s 慢。设备上一轮 38.9 ms 里：目标验证 16 个 token 23.2、草稿 3.0、设备空闲 12.3 ms。空闲来自 DFlash2 的主机流水线没有对 DSpine 生效。
+
+三项改动（都由 `DSPINE=1` 打开，DFlash2 路径一字不变）：
+
+| 项 | 问题 | 改法 |
+|---|---|---|
+| lookahead / presample / predraft | 门限写了 `num_speculative_tokens == 7`，K=15 时整条流水线没启用 | 去掉门限，按 `VLLM_HPU_DSPINE_LOOKAHEAD` / `_PREDRAFT` 开关；草稿栈的静态形状编译原来按 `self.drafter.model.model` 上的选择器判断，那个属性在包装器上，一直是 false |
+| 草稿注意力的 concat | 草稿排在采样后面下发时，Synapse 拒绝 `.../self_attn/attn/cat_1/concat`（validateNode unsupported node for hardware） | `VLLM_HPU_PAST_CONCAT_COPY=1`：先分配整块缓冲再分段拷贝，结果逐位相同 |
+| T=1 的拒绝采样修正 | 宽度 15 落回 eager 的 `correct_random_tokens`，每轮多 6.7 ms | 原生内核本身与宽度无关，只有 glue（`host.cpp` 的 `w>8`、`op.cpp` 的 `p.size(1)<=8`）和 Python 门限限制为 8；放宽到 16 并由 `VLLM_HPU_NATIVE_CORRECTION_MAX_WIDTH` 控制，卡上与 eager 参考逐位比对一致（eager 与编译两种模式各 30 组） |
+
+结果（同一容器、同一测试口径，`--skip-warmup` 后预热过的单请求，6 类负载 × 温度 0/1）：
+
+| 配置 | 每轮 token | 每轮耗时 | tok/s | 调和平均 |
+|---|---|---|---|---|
+| DFlash2 K=7 | 4.16 | 26.2 ms | 158.6 | 157.7 |
+| DSpine b16 K=15（改动前） | 4.95 | 40.7 ms | 122 | — |
+| DSpine b16 K=15（改动后） | 4.85 | 28.4 ms | 170.6 | 170.7 |
+
+T=1 的每轮从 34.0 降到 27.9 ms，与贪心（27.2）基本一致。按用例：代码 +23%/+12%（温度 0/1）、中文 +20%/+15%、英文 −11%/−7%；英文贪心的接受长度在不同次运行间 4.70–5.95 波动，单次结果有 ±5–10%，要多跑几次才能定论。
+
+剩下的差距是设备侧：16 个 token 的验证 22–23 ms，8 个 token 是 20.8 ms，差值平均分布在全部 16 个层组上，不是某个算子的问题；草稿两边都是 3.0 ms。
+
+无收益、已撤回：去掉融合 GDN 的检查点拼接（改成写入视图切片后每轮 80 ms；改成窄拷贝无变化）、value 改连续存储、草稿逐层编译。
+
+坑：容器里单文件 bind mount（`serve.sh`）看不到主机上 `sed -i` 的修改（inode 变了），要重建容器；否则会继续加载旧的内核库。

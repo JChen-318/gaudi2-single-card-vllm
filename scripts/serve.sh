@@ -30,6 +30,16 @@ HOST=${HOST:-127.0.0.1}; PORT=${PORT:-8000}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-262144}; MAX_NUM_SEQS=${MAX_NUM_SEQS:-2}; KV_CACHE_GIB=${KV_CACHE_GIB:-29}
 NUM_SPECULATIVE_TOKENS=${NUM_SPECULATIVE_TOKENS:-7}
 DTYPE=${DTYPE:-auto}
+# DSPINE=1 (docs/DSPINE.md) turns on what the DSpine draft needs on top of the DFlash2 pipeline:
+# host lookahead and predraft for its draft stack, the concat-free draft attention those two need,
+# and the native T=1 correction width for a block longer than 8 draft tokens.
+DSPINE=${DSPINE:-0}
+case "$DSPINE" in 0|1) ;; *) echo 'DSPINE must be 0 or 1'; exit 1 ;; esac
+CORRECTION_WIDTH=8
+if [ "$DSPINE" = 1 ]; then
+  [ "$NUM_SPECULATIVE_TOKENS" -le 16 ] || { echo "DSPINE=1 supports at most 16 draft tokens"; exit 1; }
+  CORRECTION_WIDTH=16
+fi
 DATA_DIR=${DATA_DIR:-$HOME/.cache/gaudi2-single-card-vllm}
 GENERATION_CONFIG=${GENERATION_CONFIG:-'{"temperature":1.0,"top_p":0.95,"top_k":20}'}
 PY=${PYTHON:-$( [ -f "$ROOT/.python" ] && cat "$ROOT/.python" || echo python3.12 )}
@@ -181,6 +191,9 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_DFLASH2_FULL_QUERY_CONV=1
   VLLM_HPU_DFLASH2_LOOKAHEAD=1 VLLM_HPU_DFLASH2_LOOKAHEAD_SAMPLE=1 VLLM_HPU_DFLASH2_LOOKAHEAD_DELTA=1
   VLLM_HPU_DFLASH2_PREDRAFT=1 VLLM_HPU_DFLASH2_PREDRAFT_VERIFY=32 VLLM_HPU_DFLASH2_EARLY_READBACK=1
+  # DSpine (above): the same lookahead and predraft for its draft stack; the buffer-copy draft
+  # attention keeps the queued draft off the concat Synapse rejects (section 25)
+  VLLM_HPU_DSPINE_LOOKAHEAD="$DSPINE" VLLM_HPU_DSPINE_PREDRAFT="$DSPINE" VLLM_HPU_PAST_CONCAT_COPY="$DSPINE"
   VLLM_HPU_DFLASH2_CPU_INPUTS=1 VLLM_HPU_DFLASH2_CONTEXT_REGION=1
   VLLM_HPU_DFLASH2_DECODE_CONTROL="$RUN/decode-control.json"
   VLLM_HPU_DFLASH2_HOST_OPT=1 VLLM_HPU_DFLASH2_HOST_OPT_CONTROL="$RUN/host-control.json"
@@ -188,6 +201,8 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   VLLM_HPU_GUARD_SKIP=1 VLLM_HPU_RNG_POOL=32
   # sampling (sections 9, 11)
   VLLM_HPU_FAST_TOPK_TOPP=1 VLLM_HPU_DFLASH2_CHUNKED_TOPK=1 VLLM_HPU_LM_HEAD_FP8=1 VLLM_HPU_NATIVE_CORRECTION=1
+  # native T=1 rejection correction: 8 draft positions for DFlash2, 16 for a DSpine block (above)
+  VLLM_HPU_NATIVE_CORRECTION_MAX_WIDTH="$CORRECTION_WIDTH"
   VLLM_HPU_BOUNDED_TOPK=0 VLLM_HPU_STABLE_SAMPLING_RNG=0
   # GDN layers through FlashInfer-Gaudi, fused verify core on gathered states (sections 13, 15)
   VLLM_HPU_FLASHINFER_GDN=1 VLLM_HPU_FLASHINFER_DFLASH2=1 VLLM_COMPACT_GDN=1

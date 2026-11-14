@@ -2188,10 +2188,9 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             16 if gaudi_envs.VLLM_HPU_DFLASH2_EARLY_READBACK else None)
                                   if gaudi_envs.VLLM_HPU_DFLASH2_LOOKAHEAD
                                   and self.speculative_config is not None and self.speculative_config.use_dflash()
-                                  # DSpine's packed refinement state is not qualified for
-                                  # lookahead/predraft reuse; use normal verification.
-                                  and self.speculative_config.num_speculative_tokens == 7
-                                  and not is_dspine
+                                  # DSpine reuses the same lookahead when VLLM_HPU_DSPINE_LOOKAHEAD=1
+                                  # (serve.sh DSPINE=1); any block length is supported.
+                                  and (not is_dspine or os.environ.get("VLLM_HPU_DSPINE_LOOKAHEAD", "0") == "1")
                                   else None)
         self.observability_config = vllm_config.observability_config
         self.is_driver_worker = is_driver_worker
@@ -7749,10 +7748,13 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                         logger.info("DFlash2 drafter regions use static-shape compilation")
                     elif (gaudi_envs.VLLM_HPU_DFLASH2_DRAFT_STACK and self.speculative_config.use_dflash()):
                         from vllm_gaudi.v1.spec_decode.dflash_draft_stack import install_draft_stack
-                        is_dspine = hasattr(self.drafter.model.model, 'select_dspine_candidates')
+                        # The selector lives on the proposer's wrapper, not on the inner model, so
+                        # read the flag the proposer already sets; DSpine needs static draft shapes.
+                        is_dspine = bool(getattr(self.drafter, 'is_dspine', False))
                         compile_draft = partial(self._compile, static_shapes=is_dspine)
                         install_draft_stack(self.drafter.model, compile_draft)
-                        logger.info("DFlash2 draft embedding, layers and norm compiled as one region")
+                        logger.info("DFlash2 draft embedding, layers and norm compiled as one region "
+                                    "(static shapes: %s)", is_dspine)
                     else:
                         self._regional_compilation(self.drafter.model)
                     if (self._is_qwen_mtp and gaudi_envs.VLLM_HPU_MTP_SINGLE_HEAD_COMPILE
@@ -10606,7 +10608,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         from vllm_gaudi.v1.spec_decode.hpu_dflash2 import HpuDFlash2Proposer
 
         drafter = self.drafter
-        if (not isinstance(drafter, HpuDFlash2Proposer) or getattr(drafter, 'is_dspine', False)
+        if (not isinstance(drafter, HpuDFlash2Proposer)
+                # DSpine predraft also needs VLLM_HPU_PAST_CONCAT_COPY=1 (serve.sh DSPINE=1).
+                or (getattr(drafter, 'is_dspine', False)
+                    and os.environ.get('VLLM_HPU_DSPINE_PREDRAFT', '0') != '1')
                 or not starts or len(starts) > padded):
             return None
         defragmenter = getattr(self, 'defragmenter', None)
