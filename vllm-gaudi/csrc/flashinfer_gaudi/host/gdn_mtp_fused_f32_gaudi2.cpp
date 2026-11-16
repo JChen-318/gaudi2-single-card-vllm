@@ -4,6 +4,8 @@
 
 extern unsigned char _binary_gdn_mtp_fused_f32_gaudi2_o_start;
 extern unsigned char _binary_gdn_mtp_fused_f32_gaudi2_o_end;
+extern unsigned char _binary_gdn_mtp_fused16_f32_gaudi2_o_start;
+extern unsigned char _binary_gdn_mtp_fused16_f32_gaudi2_o_end;
 
 namespace {
 void Map(tpc_lib_api::TensorAccessPattern& pattern, unsigned dim, unsigned indexDim,
@@ -40,6 +42,8 @@ tpc_lib_api::GlueCodeReturn GdnMtpFusedF32Gaudi2::GetGcDefinitions(
     }
     const auto* t = in->inputTensors;
     const uint64_t batch = t[1].geometry.maxSizes[2];
+    // T=8 (DFlash2) or T=16 (DSpine): same GUID, one ELF per token count.
+    const uint64_t tokens = t[1].geometry.maxSizes[1];
     if (!Shape(t[0], tpc_lib_api::DATA_F32, 4) || !Shape(t[1], tpc_lib_api::DATA_BF16, 3) ||
         !Shape(t[2], tpc_lib_api::DATA_F32, 3) || !Shape(t[3], tpc_lib_api::DATA_BF16, 3) ||
         !Shape(t[4], tpc_lib_api::DATA_I32, 2) || !Shape(t[5], tpc_lib_api::DATA_I32, 1)) {
@@ -47,17 +51,17 @@ tpc_lib_api::GlueCodeReturn GdnMtpFusedF32Gaudi2::GetGcDefinitions(
     }
     if (batch == 0 || batch > 16 || t[0].geometry.maxSizes[0] != 128 || t[0].geometry.maxSizes[1] != 128 ||
         t[0].geometry.maxSizes[2] != 48 || t[0].geometry.maxSizes[3] == 0 ||
-        t[1].geometry.maxSizes[0] != 10240 || t[1].geometry.maxSizes[1] != 8 ||
-        t[4].geometry.maxSizes[0] != 8 || t[4].geometry.maxSizes[1] != batch ||
+        t[1].geometry.maxSizes[0] != 10240 || (tokens != 8 && tokens != 16) ||
+        t[4].geometry.maxSizes[0] != tokens || t[4].geometry.maxSizes[1] != batch ||
         t[5].geometry.maxSizes[0] != batch) {
         return tpc_lib_api::GLUE_INCOMPATIBLE_INPUT_SIZE;
     }
     for (unsigned i = 2; i < 4; ++i) {
         const auto& gate = t[i].geometry;
-        if (gate.maxSizes[0] != 48 || gate.maxSizes[1] != 8 || gate.maxSizes[2] != batch)
+        if (gate.maxSizes[0] != 48 || gate.maxSizes[1] != tokens || gate.maxSizes[2] != batch)
             return tpc_lib_api::GLUE_INCOMPATIBLE_INPUT_SIZE;
     }
-    const uint64_t outputSizes[2][5] = {{128, 48, 8, batch, 0}, {128, 128, 48, 8, batch}};
+    const uint64_t outputSizes[2][5] = {{128, 48, tokens, batch, 0}, {128, 128, 48, tokens, batch}};
     bool wrongOutput = false;
     for (unsigned i = 0; i < 2; ++i) {
         auto& geometry = in->outputTensors[i].geometry;
@@ -81,18 +85,22 @@ tpc_lib_api::GlueCodeReturn GdnMtpFusedF32Gaudi2::GetGcDefinitions(
     for (unsigned i = 0; i < 6; ++i) out->inputTensorAccessPattern[i].allRequired = true;
     Map(out->outputTensorAccessPattern[0], 0, 0, 0, 0, 127);
     Map(out->outputTensorAccessPattern[0], 1, 2, 1, 0, 0);
-    Map(out->outputTensorAccessPattern[0], 2, 0, 0, 0, 7);
+    Map(out->outputTensorAccessPattern[0], 2, 0, 0, 0, static_cast<int>(tokens) - 1);
     Map(out->outputTensorAccessPattern[0], 3, 3, 1, 0, 0);
     Map(out->outputTensorAccessPattern[1], 0, 0, 0, 0, 127);
     Map(out->outputTensorAccessPattern[1], 1, 0, 0, 0, 127);
     Map(out->outputTensorAccessPattern[1], 2, 2, 1, 0, 0);
-    Map(out->outputTensorAccessPattern[1], 3, 0, 0, 0, 7);
+    Map(out->outputTensorAccessPattern[1], 3, 0, 0, 0, static_cast<int>(tokens) - 1);
     Map(out->outputTensorAccessPattern[1], 4, 3, 1, 0, 0);
     out->kernel.paramsNr = 0;
-    const unsigned size = &_binary_gdn_mtp_fused_f32_gaudi2_o_end - &_binary_gdn_mtp_fused_f32_gaudi2_o_start;
+    unsigned char* elf = tokens == 16 ? &_binary_gdn_mtp_fused16_f32_gaudi2_o_start
+                                      : &_binary_gdn_mtp_fused_f32_gaudi2_o_start;
+    unsigned char* elfEnd = tokens == 16 ? &_binary_gdn_mtp_fused16_f32_gaudi2_o_end
+                                         : &_binary_gdn_mtp_fused_f32_gaudi2_o_end;
+    const unsigned size = elfEnd - elf;
     const unsigned provided = out->kernel.elfSize;
     out->kernel.elfSize = size;
     if (provided < size) return tpc_lib_api::GLUE_INSUFFICIENT_ELF_BUFFER;
-    std::memcpy(out->kernel.kernelElf, &_binary_gdn_mtp_fused_f32_gaudi2_o_start, size);
+    std::memcpy(out->kernel.kernelElf, elf, size);
     return tpc_lib_api::GLUE_SUCCESS;
 }

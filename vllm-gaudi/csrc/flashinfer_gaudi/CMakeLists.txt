@@ -12,14 +12,20 @@ set(TPC_INCLUDE_DIR "/usr/lib/habanatools/include" CACHE PATH "TPC compiler incl
 set(HABANA_INCLUDE_DIR "/usr/include/habanalabs" CACHE PATH "Gaudi host API include directory")
 
 set(TPC_EMBEDDED_OBJECTS)
+set(WY_EXTRA "" CACHE STRING "extra tpc-clang flags for experiments")
+separate_arguments(WY_EXTRA)
 foreach(KERNEL
         gdn_packed_decode_f32_gaudi2
         gdn_mtp_packed_f32_gaudi2
         gdn_mtp_prepared_f32_gaudi2
         gdn_mtp_fused_f32_gaudi2
+        gdn_mtp_fused16_f32_gaudi2
+        gdn_mtp_wy_f32_gaudi2
+        gdn_mtp_wy8_f32_gaudi2
         dflash2_select_path_i64_f32_gaudi2
         dflash2_score_select_i64_bf16_f32_gaudi2
         silu_and_mul_bf16_gaudi2
+        spec_conv_bf16_gaudi2
         silu_mul_quant_bf16_gaudi2
         block_fp8_dequant_gaudi2
         add_rmsnorm_quant_bf16_gaudi2
@@ -28,15 +34,22 @@ foreach(KERNEL
     set(TPC_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/${KERNEL}.o")
     set(TPC_EMBEDDED_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/${KERNEL}_embedded.o")
     set(TPC_EXTRA_DEPENDENCIES)
+    set(TPC_EXTRA_FLAGS)
     if(KERNEL MATCHES "^add_rmsnorm_quant_bf16_gaudi2")
         list(APPEND TPC_EXTRA_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/norm_math_gaudi2.h")
+    endif()
+    if(KERNEL STREQUAL "gdn_mtp_wy8_f32_gaudi2")
+        list(APPEND TPC_EXTRA_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/gdn_mtp_wy_f32_gaudi2.c")
+    endif()
+    if(KERNEL STREQUAL "gdn_mtp_fused16_f32_gaudi2")
+        list(APPEND TPC_EXTRA_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/gdn_mtp_fused_f32_gaudi2.c")
     endif()
     if(KERNEL STREQUAL "add_rmsnorm_quant_bf16_gaudi2_small")
         list(APPEND TPC_EXTRA_DEPENDENCIES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/add_rmsnorm_quant_bf16_gaudi2.c")
     endif()
     add_custom_command(
         OUTPUT "${TPC_OBJECT}"
-        COMMAND "${TPC_COMPILER}" -Wall -Werror -O2 -march=gaudi2
+        COMMAND "${TPC_COMPILER}" -Wall -Werror -O2 -march=gaudi2 ${TPC_EXTRA_FLAGS} ${WY_EXTRA}
                 -I"${TPC_INCLUDE_DIR}" "${TPC_SOURCE}" -c -o "${TPC_OBJECT}"
         DEPENDS "${TPC_SOURCE}" ${TPC_EXTRA_DEPENDENCIES}
         VERBATIM
@@ -62,8 +75,10 @@ add_library(
     host/gdn_mtp_packed_f32_gaudi2.cpp
     host/gdn_mtp_prepared_f32_gaudi2.cpp
     host/gdn_mtp_fused_f32_gaudi2.cpp
+    host/gdn_mtp_wy_f32_gaudi2.cpp
     host/gdn_packed_decode_f32_gaudi2.cpp
     host/silu_and_mul_bf16_gaudi2.cpp
+    host/spec_conv_bf16_gaudi2.cpp
     host/silu_mul_quant_bf16_gaudi2.cpp
     host/block_fp8_dequant_gaudi2.cpp
     host/add_rmsnorm_quant_bf16_gaudi2.cpp

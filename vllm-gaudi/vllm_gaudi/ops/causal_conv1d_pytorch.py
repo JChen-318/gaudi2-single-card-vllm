@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import torch
+_CONV_HISTORY_INDEX_SELECT = __import__("os").environ.get("VLLM_HPU_CONV_HISTORY_INDEX_SELECT", "0") == "1"
 
 import vllm_gaudi.envs as gaudi_envs
 
@@ -219,6 +220,23 @@ def _flatten_inputs_for_update(
     raise ValueError("Could not infer how to flatten 'x' for the provided dimensions.")
 
 
+_SPEC_CONV_TPC = __import__("os").environ.get("VLLM_HPU_SPEC_CONV_TPC", "0") in ("1", "true")
+
+
+def _spec_conv_tpc(x, state_view, weight_t, state_indices, num_accepted_tokens):
+    """One TPC launch (flashinfer_gaudi spec_conv kernel): returns the activated output, writes the new state rows."""
+    op = torch.ops.custom_op.flashinfer_gaudi_spec_conv
+    idx = state_indices.to(torch.long)
+    # gather the request rows first: a custom op reading the whole (shared, in-place updated) pool makes the
+    # graph compiler keep a full copy of it
+    rows = state_view.index_select(0, idx)
+    local = torch.arange(idx.numel(), dtype=torch.int32, device=x.device)
+    out, new_state = op(x.contiguous(), rows, weight_t, local, num_accepted_tokens.to(torch.int32).contiguous())
+    with torch.no_grad():
+        state_view.index_copy_(0, idx, new_state)
+    return out
+
+
 def _hpu_causal_conv1d_spec_update(
     x: torch.Tensor,
     conv_state: torch.Tensor,
@@ -231,6 +249,7 @@ def _hpu_causal_conv1d_spec_update(
     max_query_len: int,
     round_before_activation: bool = False,
     full_query_valid_state: bool = False,
+    spec_weight_t: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Rollback and advance expanded convolution state for speculative decode.
 
@@ -269,6 +288,11 @@ def _hpu_causal_conv1d_spec_update(
         raise ValueError(f"Expanded conv state has {state_view.shape[1]} rows, requires at least {required_state_len}.")
 
     device = x.device
+    if (_SPEC_CONV_TPC and spec_weight_t is not None and full_query_valid_state and bias is None
+            and activation == "silu" and not round_before_activation and state_is_sd and width == 4
+            and x.dtype == torch.bfloat16 and state_view.dtype == torch.bfloat16 and dim % 128 == 0
+            and state_view.shape[1] == history_len - 1 + padded_tokens and device.type == "hpu"):
+        return _spec_conv_tpc(x, state_view, spec_weight_t, conv_state_indices, num_accepted_tokens)
     state_indices = conv_state_indices.to(device=device, dtype=torch.long)
     safe_indices = state_indices if full_query_valid_state else torch.remainder(state_indices, state_view.shape[0])
     state_rows = state_view.index_select(0, safe_indices)
@@ -278,8 +302,14 @@ def _hpu_causal_conv1d_spec_update(
         max=max_checkpoint,
     ) - 1
     history_indices = accepted_offset[:, None] + torch.arange(history_len, dtype=torch.long, device=device)[None, :]
-    history_indices = history_indices.unsqueeze(-1).expand(-1, -1, dim)
-    history = torch.gather(state_rows, 1, history_indices)
+    if _CONV_HISTORY_INDEX_SELECT:
+        # same rows as the gather below: flat row b * state_len + offset_b + i of [batch * state_len, dim]
+        rows_per = state_rows.shape[1]
+        flat = (history_indices + torch.arange(batch, dtype=torch.long, device=device)[:, None] * rows_per).flatten()
+        history = state_rows.reshape(batch * rows_per, dim).index_select(0, flat).view(batch, history_len, dim)
+    else:
+        history_indices = history_indices.unsqueeze(-1).expand(-1, -1, dim)
+        history = torch.gather(state_rows, 1, history_indices)
 
     x_batch = x.reshape(batch, padded_tokens, dim).to(state_view.dtype)
     if not full_query_valid_state:
@@ -706,6 +736,7 @@ def hpu_causal_conv1d_update(
     direct_state_layout: bool = False,
     round_before_activation: bool = False,
     full_query_valid_state: bool = False,
+    spec_weight_t: torch.Tensor | None = None,
 ):
     if block_idx_last_scheduled_token is not None or initial_state_idx is not None:
         raise NotImplementedError("Prefix caching metadata is not supported in the reference implementation.")
@@ -725,6 +756,7 @@ def hpu_causal_conv1d_update(
             max_query_len,
             round_before_activation,
             full_query_valid_state,
+            spec_weight_t,
         )
     if max_query_len not in (-1, None):  # Provided only for Triton helper parity
         raise NotImplementedError("'max_query_len' is not used in the reference implementation.")

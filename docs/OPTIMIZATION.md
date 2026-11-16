@@ -941,3 +941,58 @@ T=1 的每轮从 34.0 降到 27.9 ms，与贪心（27.2）基本一致。按用�
 无收益、已撤回：去掉融合 GDN 的检查点拼接（改成写入视图切片后每轮 80 ms；改成窄拷贝无变化）、value 改连续存储、草稿逐层编译。
 
 坑：容器里单文件 bind mount（`serve.sh`）看不到主机上 `sed -i` 的修改（inode 变了），要重建容器；否则会继续加载旧的内核库。
+
+## 26. DSpine 16 token 块：内核与长上下文的动态验证宽度
+
+在第 25 节的基础上，`DSPINE=1` 又打开以下各项（每项都有独立开关，DFlash2 路径不变）。
+
+**内核与小算子**
+
+| 开关 | 做法 | 效果 |
+|---|---|---|
+| `FLASHINFER_GAUDI_MTP_WY=1` | WY 形式的 GDN 验证内核（`gdn_mtp_wy_f32_gaudi2.c`）：状态与 16 个 k/q 的点积外提成两次 FP32 MME 矩阵乘（Gaudi2 的 FP32 bmm 是真 FP32，与参考差 1.4e-7），TPC 内核里只剩 WY 形式的向量乘加 | GDN 验证 4.23 → 2.66 ms/轮，整机 29.1 → 27.0 ms/轮 |
+| `VLLM_HPU_SPEC_CONV_TPC=1` | 融合投机 conv（`spec_conv_bf16_gaudi2.c`，`custom_op::flashinfer_gaudi_spec_conv`）：一次 launch 完成按接受偏移读取历史 3 行、4 tap 卷积、SiLU 和 18 行新状态。先 `index_select` 取出请求的行再传入算子，再 `index_copy_` 写回 | 新状态逐位一致，输出差 ≤1 bf16 ulp；bench 26.3 ms/轮，188.9 tok/s |
+| `VLLM_HPU_MROPE_CONST_MASKS=1` | 交错 M-RoPE 的通道掩码在 `__init__` 里一次建好 | CPU 上逐位一致 |
+| `VLLM_HPU_CONV_HISTORY_INDEX_SELECT=1` | conv 历史行改用扁平 `index_select`，替代 expand+gather | CPU 上逐位一致；105K 39.4 → 37.5 ms/轮（与上一项合计） |
+
+**长上下文：动态验证宽度**
+
+- `VLLM_HPU_DSPINE_DYNAMIC_WIDTH=32768`：上下文达到 32768 token 后，每轮只验证 8 个 token（取前 7 个草稿）。
+  - 原因：100K 时，16 宽的采样轮 36.6 ms 出 4.19 个 token，8 宽的 31.9 ms 出 4.39 个。
+  - 主机 lookahead 预建、预草稿桥（`_dflash2_predraft(_plan)` 按本轮实际宽度）和 warm-up 都跟着宽度走。
+- 坑：同一个编译区域先见 16 个 token、再见 8 个，Dynamo 会把 token 维标成动态，之后的图在主机上逐个算子执行。
+  - py-spy 现象：43% 时间在 `OpOverload.__call__`；每个层组主机耗时 1.4 ms，正常 0.5 ms；E→W 等待 0.7 ms，正常 11–15 ms。
+  - 后果：100K 每轮 37.9 ms。
+- 纯静态编译（`VLLM_T_COMPILE_DYNAMIC_SHAPES=0`）能解决：100K 31.2 ms，200K 约 36 ms；16 宽每轮也快 1–3 ms；prefill 不变。
+  - 但它不能用于生产：每个 decode 桶 × 20 个层组都要单独编译，完整预热要几个小时（40 分钟时已重编译 1383 次，原来整个预热只有 305 次）。
+- 生产做法 `VLLM_HPU_DSPINE_WIDTH_GROUPS=1`：给 8 宽的轮次另编一套层组，代码对象独立，因此每套只会见到一种 token 宽度；block 维照旧动态，预热时间不变。
+  - 生产 `MAX_NUM_SEQS=2`，两个请求的 8 宽轮也是 16 行，所以这套只用于单请求（批 1、8 行）。
+  - 第一次上线没有加这个限制，结果新层组同时见到 8 行和 16 行，又退回慢路径。
+
+生产结果（完整预热 34 分钟，前缀缓存和视觉都开着，采样 T=1，`warm_prod` 每轮 ms）：
+
+| 上下文 | 48K | 80K | 112K | 160K | 192K | 240K |
+|---|---|---|---|---|---|---|
+| 固定 16 宽 | 34.0 | 34.4 | 37.2 | 42.2 | 43.4 | 47.1 |
+| 动态宽度 + 分宽度层组 | 30.1 | 32.1 | 33.3 | 35.6 | 36.5 | 39.3 |
+
+短上下文 bench 调和平均 188.1 tok/s（原来 187.7）。冒烟检查：
+- vision 12/12；
+- 大海捞针 124K 3/3，缓存命中后 1 秒；
+- 57K 多轮前缀输出一致；
+- 0 错误。
+
+**试过、无收益的项**
+
+这些代码都保留，默认关闭：
+- 延迟 T16 检查点（`FLASHINFER_GAUDI_MTP_WY_DEFER`）：生产规模的 pool（322 行 × 3 MB）下，重建结果写回的开销超过内核节省。
+- 门控 RMSNorm+FP8 融合（`VLLM_HPU_GDN_GATED_NORM_QUANT`，内核未随本仓库发布）。
+- 草稿 FP8（`VLLM_HPU_DRAFT_FP8`）。
+- 原生 T16 融合 GDN（`gdn_mtp_fused16_f32_gaudi2.c`）。
+- 层组大小 8：每轮 100 ms。
+- `VLLM_HPU_STATIC_DRAFT_REGIONS`：草稿区域静态编译，运行时触发几十次编译，bench 降到 163 tok/s。
+
+**坑**
+- 编译区域里不能动态 `__import__`：会触发 graph break，每层拆成 6–7 个 recipe。
+- 不要把整个共享状态 pool 传进自定义算子，也不要在同一图里对 pool 做静态切片写回：编译器会整块拷贝 pool，每层约 1 ms。
+- Gaudi2 上独立的 GEMM 和 TPC 内核不会并行，只有编译器捆绑在一起的生产者→消费者对才会流水。

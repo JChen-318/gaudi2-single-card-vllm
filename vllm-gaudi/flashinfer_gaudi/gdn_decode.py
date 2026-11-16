@@ -16,6 +16,7 @@ from flashinfer_gaudi._native import (
     public_mtp_fused_op,
     public_mtp_gdn_op,
     public_mtp_prepared_op,
+    public_mtp_wy_op,
 )
 from flashinfer_gaudi._reference import (
     _l2_normalize_rsqrt,
@@ -37,6 +38,12 @@ _QWEN38_MTP_MAX_BATCH = 16
 # mutable "log once" sets to Dynamo's guarded decode path. Existing probe
 # detail remains available for an explicitly enabled diagnostic run.
 _MTP_TRACE_ENABLED = os.getenv("FLASHINFER_GAUDI_MTP_TRACE", "0").strip().lower() in ("1", "true", "yes", "on")
+# DSpine T16 verification in one native call (kernel library built with gdn_mtp_fused16_f32_gaudi2): the state tile
+# stays in registers across all 16 tokens. Off = the original two-call T8 composition. Read once at import.
+_MTP_NATIVE16 = os.getenv("FLASHINFER_GAUDI_MTP_NATIVE16", "0").strip().lower() in ("1", "true", "yes", "on")
+# WY-form verification (kernels/gdn_mtp_wy_f32_gaudi2.c): the state.k / state.q dot products move to two FP32 MME
+# matmuls; the TPC kernel keeps only vector multiply-adds over the tile rows. T8 and T16. Read once at import.
+_MTP_WY = os.getenv("FLASHINFER_GAUDI_MTP_WY", "0").strip().lower() in ("1", "true", "yes", "on")
 # Largest full-query batch routed to the prepared kernel inside compiled graphs. The
 # kernel and its glue accept B<=16; B>1 must be qualified per deployment. Read once
 # so Dynamo guards a constant instead of the process environment.
@@ -472,11 +479,134 @@ def _gated_delta_rule_mtp_fused(
     return output.to(packed_qkv.dtype), state_pool
 
 
+def _gated_delta_rule_mtp_wy(
+    packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+    assume_distinct_checkpoints=False, checkpoint_start=None,
+):
+    """Full-query verification (T = 8 or 16) in WY form; same outputs and checkpoint writes as the fused core.
+    rmat[b, h, t] = S0 k_t / S0 q_t and the per-key-head Gram matrix of [k; q] are FP32 matmuls (MME)."""
+    native = public_mtp_wy_op()
+    if native is None:
+        raise BackendUnavailableError("The WY MTP kernel is not loaded; rebuild the native extension.")
+    batch, tokens, _ = packed_qkv.shape
+    if checkpoint_start is not None and (not assume_distinct_checkpoints or checkpoint_start < 1
+                                        or checkpoint_start + batch * tokens > state_pool.shape[0]):
+        raise ValueError("Direct checkpoints require valid, distinct contiguous destinations")
+    offsets = num_accepted_tokens.long().clamp(1, tokens) - 1
+    loads = state_indices.gather(1, offsets.unsqueeze(1)).squeeze(1).long()
+    source = state_pool.index_select(0, loads)                                        # [B, 48, V, K]
+    qk = packed_qkv[..., :4096].float().view(batch, tokens, 2, 16, 128)
+    x = torch.cat((qk[:, :, 1].transpose(1, 2), qk[:, :, 0].transpose(1, 2)), 2)    # [B, 16, 2T, K]: k rows, q rows
+    gram = torch.matmul(x, x.transpose(-1, -2))                                       # [B, 16, 2T, 2T]
+    rmat = torch.matmul(x[:, :, None], source.view(batch, 16, 3, 128, 128).transpose(-1, -2))
+    rmat = rmat.reshape(batch, 48, 2 * tokens, 128)                                   # rows: S0 k_t, S0 q_t
+    vals = packed_qkv[..., 4096:].float().reshape(batch, tokens, 48, 128)
+    kvals = qk[:, :, 1].contiguous()                                                  # [B, T, 16, K] raw k
+    output, checkpoints = native(source, kvals, log_decay, beta, rmat.contiguous(), gram.contiguous(),
+                                 vals.contiguous())
+    flat = checkpoints.reshape(-1, *state_pool.shape[1:])
+    if checkpoint_start is not None:
+        state_pool.narrow(0, checkpoint_start, batch * tokens).copy_(flat)
+    elif assume_distinct_checkpoints:
+        state_pool.index_copy_(0, state_indices.reshape(-1).long(), flat)
+    else:
+        for token in range(tokens):
+            state_pool.index_copy_(0, state_indices[:, token].long(), checkpoints[:, token])
+    return output.to(packed_qkv.dtype), state_pool
+
+
+
+# Deferred T16 checkpoints v4 (FLASHINFER_GAUDI_MTP_WY_DEFER=1, kernel library built with -DDEFER2).
+_MTP_WY_DEFER = os.getenv("FLASHINFER_GAUDI_MTP_WY_DEFER", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def mtp_defer_enabled() -> bool:
+    return _MTP_WY_DEFER
+
+
+def _d2_parts(side):
+    """side rows [B, 48, 128, 128] -> ds [B,T,48,V], raw k [B,T,16,K], log decay [B,T,48], signature [B,128]."""
+    ds = side[:, :, 0:16, :].permute(0, 2, 1, 3)
+    kraw = side[:, 0::3, 16:32, :].permute(0, 2, 1, 3)
+    ld = side[:, :, 32, 0:16].permute(0, 2, 1)
+    return ds, kraw, ld, side[:, 0, 33, :]
+
+
+def _d2_rebuild(s0, ds, kraw, ld, off, valid):
+    batch, T = s0.shape[0], 16
+    tok = torch.arange(T, device=s0.device).view(1, T, 1)
+    cl = ld.cumsum(1)
+    cl_off = cl.gather(1, off.view(batch, 1, 1).expand(batch, 1, 48))
+    keep = (tok <= off.view(batch, 1, 1)) & valid.view(batch, 1, 1)
+    w = torch.where(keep, torch.exp(cl_off - cl), torch.zeros_like(cl))
+    a = (ds * w.unsqueeze(-1)).reshape(batch, T, 16, 384).permute(0, 2, 3, 1)
+    upd = torch.matmul(a, kraw.permute(0, 2, 1, 3)).reshape(batch, 48, 128, 128)
+    g = torch.where(valid.view(batch, 1), torch.exp(cl_off.view(batch, 48)), torch.ones_like(cl_off.view(batch, 48)))
+    return s0 * g.view(batch, 48, 1, 1) + upd
+
+
+def materialize_deferred(state_pool, first, load, accepted):
+    """Write the accepted state into row ``load`` when rows first/first+1 hold valid deferred data, then invalidate
+    it. first/load: [B] row indices (-1 = padding), accepted: [B] accepted counts."""
+    first = first.reshape(-1).long()
+    load = load.reshape(-1).long()
+    batch = first.numel()
+    ok = (first >= 0) & (load >= 0)
+    first = torch.where(ok, first, torch.zeros_like(first))
+    side_rows = torch.where(ok, first + 1, torch.full_like(first, state_pool.shape[0] - 1))
+    load = torch.where(ok, load, torch.zeros_like(load))
+    base = state_pool.index_select(0, first)
+    side = state_pool.index_select(0, side_rows)
+    ds, kraw, ld, sig = _d2_parts(side)
+    valid = (base[:, 0, 0, :] == sig).all(dim=1) & ok
+    off = accepted.reshape(-1).long().clamp(1, 16) - 1
+    rebuilt = _d2_rebuild(base, ds, kraw, ld, off, valid)
+    current = state_pool.index_select(0, load)
+    state = torch.where(valid.view(batch, 1, 1, 1), rebuilt, current)
+    poison = torch.ones_like(side)
+    poison[:, 0, 33, :] = float("nan")
+    cleared = torch.where(valid.view(batch, 1, 1, 1), side * poison, side)
+    state_pool.index_copy_(0, side_rows, cleared)
+    state_pool.index_copy_(0, load, state)
+    return state_pool
+
+
+def _gated_delta_rule_mtp_wy_deferred(packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+                                      checkpoint_start):
+    native = public_mtp_wy_op()
+    if native is None:
+        raise BackendUnavailableError("The WY MTP kernel is not loaded; rebuild the native extension.")
+    batch, tokens, _ = packed_qkv.shape
+    cs = int(checkpoint_start)
+    off = num_accepted_tokens.long().clamp(1, tokens) - 1
+    base = torch.stack([state_pool[cs + b * tokens] for b in range(batch)])
+    side = torch.stack([state_pool[cs + b * tokens + 1] for b in range(batch)])
+    ds, kraw, ld, sig = _d2_parts(side)
+    valid = (base[:, 0, 0, :] == sig).all(dim=1)
+    lattice = state_pool.index_select(0, state_indices.gather(1, off.unsqueeze(1)).squeeze(1).long())
+    s0 = torch.where(valid.view(batch, 1, 1, 1), base, lattice)
+    source = _d2_rebuild(s0, ds, kraw, ld, off, valid).contiguous()
+    qk = packed_qkv[..., :4096].float().view(batch, tokens, 2, 16, 128)
+    x = torch.cat((qk[:, :, 1].transpose(1, 2), qk[:, :, 0].transpose(1, 2)), 2)
+    gram = torch.matmul(x, x.transpose(-1, -2))
+    rmat = torch.matmul(x[:, :, None], source.view(batch, 16, 3, 128, 128).transpose(-1, -2))
+    rmat = rmat.reshape(batch, 48, 2 * tokens, 128)
+    vals = packed_qkv[..., 4096:].float().reshape(batch, tokens, 48, 128)
+    kvals = qk[:, :, 1].contiguous()
+    output, persist = native(source, kvals, log_decay, beta, rmat.contiguous(), gram.contiguous(), vals.contiguous())
+    for b in range(batch):
+        state_pool.narrow(0, cs + b * tokens, 2).copy_(persist[b, 0:2])
+    return output.to(packed_qkv.dtype), state_pool
+
+
 def _gated_delta_rule_mtp_fused16(
     packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
     assume_distinct_checkpoints=False, checkpoint_start=None,
 ):
     """Compose two functional T8 kernels while retaining all T16 checkpoints."""
+    if _MTP_WY and public_mtp_wy_op() is not None:
+        return _gated_delta_rule_mtp_wy(packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+                                        assume_distinct_checkpoints, checkpoint_start)
     native = public_mtp_fused_op()
     if native is None:
         raise BackendUnavailableError("The fused MTP kernel is not loaded")
@@ -490,8 +620,21 @@ def _gated_delta_rule_mtp_fused16(
     loads = state_indices.gather(1, offsets.unsqueeze(1)).squeeze(1).long()
     source = state_pool.index_select(0, loads)
     slots = torch.arange(batch, dtype=state_indices.dtype, device=state_indices.device)
-    slots = slots.unsqueeze(1).expand(batch, 8).contiguous()
     accepted = torch.ones_like(num_accepted_tokens).reshape(batch)
+    if _MTP_NATIVE16:
+        # One T16 kernel: each state row is read once, all 16 checkpoints come straight out of the kernel.
+        slots = slots.unsqueeze(1).expand(batch, tokens).contiguous()
+        output, checkpoints = native(source, packed_qkv, log_decay, beta, slots, accepted)
+        flat = checkpoints.reshape(-1, *state_pool.shape[1:])
+        if checkpoint_start is not None:
+            state_pool.narrow(0, checkpoint_start, batch * tokens).copy_(flat)
+        elif assume_distinct_checkpoints:
+            state_pool.index_copy_(0, state_indices.reshape(-1).long(), flat)
+        else:
+            for token in range(tokens):
+                state_pool.index_copy_(0, state_indices[:, token].long(), checkpoints[:, token])
+        return output.to(packed_qkv.dtype), state_pool
+    slots = slots.unsqueeze(1).expand(batch, 8).contiguous()
     first, first_states = native(source, packed_qkv[:, :8].contiguous(), log_decay[:, :8].contiguous(),
                                  beta[:, :8].contiguous(), slots, accepted)
     second, second_states = native(first_states[:, -1].contiguous(), packed_qkv[:, 8:].contiguous(),
@@ -553,6 +696,20 @@ def gated_delta_rule_mtp_packed(
         raise ValueError("num_accepted_tokens and query_lengths must each contain one entry per request.")
 
     policy = get_backend_policy()
+    if _MTP_WY_DEFER and tokens == 16:
+        if (initial_state_indices is None and assume_full_query and checkpoint_start is not None
+                and torch.compiler.is_compiling() and public_mtp_wy_op() is not None and policy != "pytorch"
+                and batch <= _MTP_PREPARED_MAX_BATCH):
+            return _gated_delta_rule_mtp_wy_deferred(packed_qkv, log_decay, beta, state_pool, state_indices,
+                                                     num_accepted_tokens, checkpoint_start)
+        # the -DDEFER2 kernel no longer writes lattice checkpoints: materialize, then the exact reference
+        _off = num_accepted_tokens.long().clamp(1, tokens) - 1
+        _load = (initial_state_indices.reshape(-1) if initial_state_indices is not None
+                 else state_indices.gather(1, _off.view(-1, 1)).squeeze(1))
+        materialize_deferred(state_pool, state_indices[:, 0], _load, num_accepted_tokens)
+        return _gated_delta_rule_mtp_packed_reference(
+            packed_qkv, log_decay, beta, state_pool, state_indices, num_accepted_tokens,
+            query_lengths, scale, use_qk_l2norm, assume_full_query, initial_state_indices)
     if initial_state_indices is not None:
         # A shortened verification block can load a checkpoint beyond its
         # current output width. Keep load addressing separate from stores.
@@ -590,6 +747,8 @@ def gated_delta_rule_mtp_packed(
                 policy, batch, tokens, assume_full_query)
         prepared_core = (_gated_delta_rule_mtp_fused if mtp_fused_enabled() and public_mtp_fused_op() is not None
                          else _gated_delta_rule_mtp_prepared)
+        if _MTP_WY and public_mtp_wy_op() is not None:
+            prepared_core = _gated_delta_rule_mtp_wy
         return prepared_core(
             packed_qkv,
             log_decay,

@@ -138,6 +138,10 @@ def public_mtp_fused_op() -> Callable | None:
     return _resolve_op("custom_op", "flashinfer_gaudi_gdn_mtp_fused")
 
 
+def public_mtp_wy_op() -> Callable | None:
+    return _resolve_op("custom_op", "flashinfer_gaudi_gdn_mtp_wy")
+
+
 def native_dflash2_grouped_conv_op() -> Callable | None:
     return _resolve_op("flashinfer_gaudi", "dflash2_grouped_conv")
 

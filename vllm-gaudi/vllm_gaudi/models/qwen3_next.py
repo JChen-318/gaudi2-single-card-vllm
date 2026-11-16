@@ -255,6 +255,12 @@ def compile_hpu_qwen3_layer_groups(
             for index, (compiled, group) in enumerate(zip(compiled_groups, groups, strict=True)))
         object.__setattr__(model, "_hpu_gdn_dma_pipeline", pipeline)
     object.__setattr__(model, "_hpu_compiled_layer_groups", compiled_groups)
+    if (os.environ.get("VLLM_HPU_DSPINE_WIDTH_GROUPS", "0") not in ("", "0")
+            and os.environ.get("VLLM_HPU_DSPINE_DYNAMIC_WIDTH", "0") not in ("", "0")
+            and not gaudi_envs.VLLM_HPU_GDN_ASYNC_STATE_DMA):
+        # DSPINE_WIDTH_GROUPS: separate compiled groups (own code objects) for the 8-wide rounds
+        narrow = build_hpu_qwen3_layer_groups(model, group_size, final_norm)
+        object.__setattr__(model, "_hpu_compiled_layer_groups_narrow", tuple(compile_fn(g) for g in narrow))
     object.__setattr__(model, "_hpu_compiled_groups_include_final_norm", final_norm is not None)
     object.__setattr__(model, "_hpu_compiled_group_end_layers", tuple(group._end_layer for group in groups))
     object.__setattr__(model, "_hpu_compiled_group_aux_layers", tuple(model.aux_hidden_state_layers))
@@ -319,6 +325,15 @@ class HpuQwen3NextModel(UpstreamQwen3NextModel):
     ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
         layer_groups = getattr(self, "_hpu_compiled_layer_groups", None)
         attn_metadata = get_forward_context().attn_metadata
+        narrow_groups = getattr(self, "_hpu_compiled_layer_groups_narrow", None)
+        if narrow_groups is not None and attn_metadata is not None and not getattr(attn_metadata, "is_prompt", True):
+            # DSPINE_WIDTH_GROUPS: rows per request of this decode round
+            _accepted = getattr(attn_metadata, "num_accepted_tokens", None)
+            _rows = (input_ids if input_ids is not None else inputs_embeds)
+            # single-request rounds only: the narrow set must only ever see 8 rows
+            if (_accepted is not None and _rows is not None and _accepted.shape[0] == 1
+                    and _rows.shape[0] == 8):
+                layer_groups = narrow_groups
         group0_kwargs = None
         if (getattr(self, "_hpu_group0_embeds", False) and get_pp_group().is_first_rank and inputs_embeds is None
                 and input_ids is not None and not gaudi_envs.VLLM_HPU_NATIVE_DECODE_GRAPH

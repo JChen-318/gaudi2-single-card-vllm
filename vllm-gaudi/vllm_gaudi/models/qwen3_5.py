@@ -214,6 +214,28 @@ def _save_ssm_state(core_attn_out, final_state, ssm_state, state_indices):
     return core_attn_out
 
 
+import vllm_gaudi.extension.ops as _gnq_hops  # noqa: E402
+_GATED_NORM_QUANT = __import__("os").environ.get("VLLM_HPU_GDN_GATED_NORM_QUANT", "0") in ("1", "true")
+
+
+def _gnq_eligible(layer, x, z) -> bool:
+    """Decode out_proj on the block-FP8 channel path whose input quant is the plain row amax path."""
+    _hops = _gnq_hops
+    norm, proj = layer.norm, layer.out_proj
+    qm = getattr(proj, "quant_method", None)
+    return (getattr(norm, "norm_before_gate", False) and getattr(norm, "group_size", None) is None
+            and getattr(norm, "activation", None) in ("silu", "swish") and abs(norm.eps - 1e-6) < 1e-12
+            and norm.weight.numel() == 128 and norm.weight.dtype == torch.bfloat16
+            and x.dtype == torch.bfloat16 and z.dtype == torch.bfloat16 and x.shape[-1] == 128
+            and getattr(qm, "block_quant", False) and envs.VLLM_HPU_FORCE_CHANNEL_FP8
+            and getattr(proj, "bias", None) is None and hasattr(proj, "weight_scale_inv")
+            and proj.weight.dtype == torch.float8_e4m3fn and _hops._triton_dynamic_quant is None
+            and not _hops._use_jit_dynamic_quant(x.view(-1, 128))
+            and not _hops._use_cguid_dynamic_quant(x.view(-1, 128)))
+
+
+from flashinfer_gaudi import gdn_decode as _fg_gdn_defer  # noqa: E402
+
 class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
 
     def __init__(self, *args, **kwargs):
@@ -268,6 +290,22 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # Materialize that tap-major layout once while the checkpoint loader
         # writes the canonical [channels, 1, width] parameter.
         self._triton_conv_weight_ready = False
+        # VLLM_HPU_SPEC_CONV_TPC: tap-major [4, C] conv weight for the fused speculative conv kernel
+        if __import__("os").environ.get("VLLM_HPU_SPEC_CONV_TPC", "0") in ("1", "true"):
+            _cw = self.conv1d.weight
+            self.register_buffer("_spec_conv_w_t", _cw.new_empty((self.conv_kernel_size, _cw.size(0))),
+                                 persistent=False)
+            _orig_cw_loader = _cw.weight_loader
+
+            def _load_cw_and_transpose(param, loaded_weight):
+                result = _orig_cw_loader(param, loaded_weight)
+                with torch.no_grad():
+                    self._spec_conv_w_t.copy_(param.view(param.size(0), param.size(2)).transpose(0, 1))
+                return result
+
+            _cw.weight_loader = _load_cw_and_transpose
+        else:
+            self._spec_conv_w_t = None
         self._triton_dt_bias_ready = False
         if _triton_gaudi_mode in ("hybrid", "strict"):
             conv_weight = self.conv1d.weight
@@ -755,6 +793,13 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             has_dflash_state = num_accepted_tokens is not None and load_state_indices is not None
             is_spec_decode = has_dflash_state and load_state_indices.dim() == 2
             is_dflash_transition = has_dflash_state and load_state_indices.dim() == 1
+            if (is_dflash_transition and ssm_state is not None and num_decodes > 0
+                    and _fg_gdn_defer.mtp_defer_enabled() and ssm_state.dtype == torch.float32):
+                # 1-token step after deferred T16 verifications: rebuild the accepted state in the row it loads
+                _acc = num_accepted_tokens[:num_decodes].long()
+                _load = load_state_indices[:num_decodes].long()
+                _first = torch.where(_load >= 0, _load - (_acc.clamp(1, 16) - 1), _load)
+                _fg_gdn_defer.materialize_deferred(ssm_state, _first, _load, _acc)
             selected_conv_state = conv_state
             direct_conv_state = False
             if (not is_spec_decode and direct_gdn_state and self.compact_state_group_count is not None
@@ -857,6 +902,7 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     validate_data=False,
                     direct_state_layout=direct_conv_state,
                     round_before_activation=self.dflash_conv_round_before_activation,
+                    spec_weight_t=self._spec_conv_w_t,
                     full_query_valid_state=(self.dflash_full_query_conv and is_spec_decode and dflash_full_query
                                             and self.compact_state_group_offset is not None
                                             and not block_state_caching(self.cache_config)),
@@ -969,6 +1015,15 @@ class HPUGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 self.norm.eps,
                 self.norm.activation,
             )
+        elif _GATED_NORM_QUANT and not is_prompt and _gnq_eligible(self, core_attn_out, z):
+            q8, s8 = torch.ops.custom_op.flashinfer_gaudi_gated_norm_quant(
+                core_attn_out.reshape(-1, z_shape_og[-2] * z_shape_og[-1]).contiguous(),
+                z.reshape(-1, z_shape_og[-2] * z_shape_og[-1]).contiguous(), self.norm.weight)
+            output = torch.ops.hpu.fp8_gemm_v2(A=q8, trans_A=False, B=self.out_proj.weight, trans_B=True, D=None,
+                                              out_dtype=torch.bfloat16, A_scale_inv=s8,
+                                              B_scale_inv=self.out_proj.weight_scale_inv, bias=None,
+                                              accumulate=False)
+            return output.view(orig_shape)
         else:
             core_attn_out = self.norm(core_attn_out, z)
         core_attn_out = core_attn_out.reshape(z_shape_og)

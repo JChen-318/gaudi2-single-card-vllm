@@ -183,8 +183,6 @@ def _validate_hpu_dflash2_config(vllm_config: VllmConfig) -> None:
         if any(dflash_config.get(key) for key in ("conv_kernel_size", "selector_rank",
                                                   "selected_prefix_terminal_residual_rank")):
             raise ValueError("Unsupported DSpine convolution, selector or terminal residual")
-        if vllm_config.cache_config.enable_prefix_caching:
-            raise ValueError("HPU DSpine currently requires --no-enable-prefix-caching")
     draft_mismatches = _config_field_mismatches(draft_hf_config, draft_fields)
     draft_mismatches.extend(_config_field_mismatches(dflash_config, head_fields))
     if draft_mismatches:

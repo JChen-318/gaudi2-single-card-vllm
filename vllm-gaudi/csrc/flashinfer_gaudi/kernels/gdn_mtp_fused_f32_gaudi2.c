@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-// Fused full-query MTP core (B<=16, T=8, H=16, HV=48, K=V=128).
+// Fused full-query MTP core (B<=16, T=TOKENS (8, or 16 via gdn_mtp_fused16_f32_gaudi2.c), H=16, HV=48, K=V=128).
 //
 // Inputs come straight from the model: the recurrent state pool, the
 // per-token checkpoint slots and accepted counts, the raw BF16 conv output
 // [q | k | v], the FP32 log decay and the BF16 beta. Outputs match the
-// prepared core: FP32 attention output and all eight FP32 checkpoints.
+// prepared core: FP32 attention output and all TOKENS FP32 checkpoints.
 //
 // One index-space point is one (value head, request). Per token, Q/K
 // conversion, L2 norms, k.q, exp(log decay) and beta are computed once and
 // kept in local memory; the 128 state rows are then processed in tiles of
-// ROWS rows, carried in registers across the eight tokens. Normalization is
+// ROWS rows, carried in registers across all TOKENS tokens: each state row is read once per call. Normalization is
 // folded into scalars (rk = 1/|k|, rq = scale/|q|):
 //   proj  = g rk (S.k)                     delta = beta (v - proj)
 //   S'    = g S + (delta rk) k             out   = g rq S.q + rq k.q (delta rk)
 // and the 2*ROWS dot products of a tile share one lane-interleaving
 // reduction tree (lane i of the result holds dot product i).
 #define ROWS 8
+#ifndef TOKENS
 #define TOKENS 8
+#endif
 
 #define XOR_LUT(name, m)                                                                                       \
     uint64 name##_bytes = 0x80808080;                                                                          \
@@ -62,7 +64,16 @@ float64_pair_t bf16_to_f32_linear(bfloat128 input)
 }
 
 // Per token: q_lo, q_hi, k_lo, k_hi; coefficient lanes 0..4: g, beta rk, ck = g rk, cq = g rq, cd = rq k.q.
+// Vector local memory is 16 KiB: FP32 Q/K for more than 8 tokens does not fit (16 tokens = 20 KiB with the
+// coefficients), so T>8 keeps Q and K as BF16 (exact: they are BF16 inputs) packed from the linear FP32 pair with
+// the paired converter and unpacked by its inverse in the tile loop (12 KiB for 16 tokens).
+#if TOKENS > 8
+#define QK_BF16 1
+__local__ bfloat128 token_qb[TOKENS];
+__local__ bfloat128 token_kb[TOKENS];
+#else
 __local__ float64 token_qk[TOKENS * 4];
+#endif
 __local__ float64 token_coef[TOKENS];
 
 void main(tensor state_pool, tensor packed_qkv, tensor log_decay, tensor beta, tensor state_indices,
@@ -112,10 +123,15 @@ void main(tensor state_pool, tensor packed_qkv, tensor log_decay, tensor beta, t
                 int5 scalar_coords = {head, token, batch, 0, 0};
                 const float64 g = v_exp_f32(v_broadcast_element_f32(v_f32_ld_tnsr_b(scalar_coords, log_decay), 0));
                 const float beta_value = (float)s_bf16_ld_g((__global__ bf16*)gen_addr(scalar_coords, beta));
+#ifdef QK_BF16
+                token_qb[token] = v_convert_f32_to_bf16_all_b(q, 0);
+                token_kb[token] = v_convert_f32_to_bf16_all_b(k, 0);
+#else
                 token_qk[token * 4 + 0] = q.v1;
                 token_qk[token * 4 + 1] = q.v2;
                 token_qk[token * 4 + 2] = k.v1;
                 token_qk[token * 4 + 3] = k.v2;
+#endif
                 float64 coef = g;
                 coef = v_f32_mov_vb(rk * beta_value, 0, coef, v_u32_cmp_eq_b(lanes, (uint64)1));
                 coef = v_f32_mov_vb(g * rk, 0, coef, v_u32_cmp_eq_b(lanes, (uint64)2));
@@ -135,10 +151,19 @@ void main(tensor state_pool, tensor packed_qkv, tensor log_decay, tensor beta, t
                     state_hi[row] = v_f32_ld_tnsr_b(coords, state_pool);
                 }
                 for (int token = 0; token < TOKENS; ++token) {
+#ifdef QK_BF16
+                    const float64_pair_t q_pair = v_convert_bf16_to_f32_all_b(token_qb[token]);
+                    const float64_pair_t k_pair = v_convert_bf16_to_f32_all_b(token_kb[token]);
+                    const float64 q_lo = q_pair.v1;
+                    const float64 q_hi = q_pair.v2;
+                    const float64 k_lo = k_pair.v1;
+                    const float64 k_hi = k_pair.v2;
+#else
                     const float64 q_lo = token_qk[token * 4 + 0];
                     const float64 q_hi = token_qk[token * 4 + 1];
                     const float64 k_lo = token_qk[token * 4 + 2];
                     const float64 k_hi = token_qk[token * 4 + 3];
+#endif
                     const float64 coef = token_coef[token];
                     const float64 g = v_broadcast_element_f32(coef, 0);
                     const float64 beta_rk = v_broadcast_element_f32(coef, 1);

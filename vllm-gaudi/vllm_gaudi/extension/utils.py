@@ -13,6 +13,11 @@ from typing import Optional, Any
 import habana_frameworks.torch as htorch
 import torch
 import itertools
+
+# KV slicing bounds the [q, k] score memory of long prompts. A short query (DSpine's 16-token causal draft block
+# over its 8192-key window) gains nothing from it, and the sliced path runs as separate eager calls with a host
+# round trip each; below this query length the whole-key FusedSDPA is used. 0 = always eligible (original).
+_FSDPA_SLICE_MIN_QUERY = int(os.getenv("VLLM_HPU_FSDPA_SLICE_MIN_QUERY", "0"))
 from vllm_gaudi.extension.logger import logger
 
 from vllm_gaudi.extension.runtime import get_config
@@ -469,6 +474,7 @@ class ModuleFusedSDPA(torch.nn.Module):
 
     def can_use_slicing(self, query, key, attn_mask, is_causal, padding_side="left", window_size=None, sinks=None):
         return (self._sliced_module.enable_slicing and key.shape[-2] >= self._sliced_module.slice_thld
+                and query.shape[-2] >= _FSDPA_SLICE_MIN_QUERY
                 and query.shape[0] == 1 and query.shape[-2] != key.shape[-2] and is_causal and attn_mask is not None
                 and padding_side == 'right' and window_size is None and sinks is None)
 
@@ -597,6 +603,7 @@ class ModuleFP8FusedSDPA(torch.nn.Module):
 
     def can_use_slicing(self, query, key, attn_mask, is_causal, padding_side="left", window_size=None, sinks=None):
         return (self._sliced_module.enable_slicing and key.shape[-2] >= self._sliced_module.slice_thld
+                and query.shape[-2] >= _FSDPA_SLICE_MIN_QUERY
                 and query.shape[0] == 1 and query.shape[-2] != key.shape[-2] and is_causal and attn_mask is not None
                 and padding_side == 'right' and window_size is None and sinks is None)
 

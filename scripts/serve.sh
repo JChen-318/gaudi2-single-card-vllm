@@ -36,9 +36,13 @@ DTYPE=${DTYPE:-auto}
 DSPINE=${DSPINE:-0}
 case "$DSPINE" in 0|1) ;; *) echo 'DSPINE must be 0 or 1'; exit 1 ;; esac
 CORRECTION_WIDTH=8
+# DSPINE_DYNAMIC_WIDTH: from this many context tokens on, a DSpine round verifies 8 tokens instead of the full
+# block (section 26); 0 keeps the full block everywhere. Only used with DSPINE=1.
+DSPINE_DYNAMIC_WIDTH_TOKENS=0
 if [ "$DSPINE" = 1 ]; then
   [ "$NUM_SPECULATIVE_TOKENS" -le 16 ] || { echo "DSPINE=1 supports at most 16 draft tokens"; exit 1; }
   CORRECTION_WIDTH=16
+  DSPINE_DYNAMIC_WIDTH_TOKENS=${DSPINE_DYNAMIC_WIDTH:-32768}
 fi
 DATA_DIR=${DATA_DIR:-$HOME/.cache/gaudi2-single-card-vllm}
 GENERATION_CONFIG=${GENERATION_CONFIG:-'{"temperature":1.0,"top_p":0.95,"top_k":20}'}
@@ -194,6 +198,11 @@ CMD=(env -u QUANT_CONFIG -u HABANA_VISIBLE_MODULES -u CUDA_VISIBLE_DEVICES -u HA
   # DSpine (above): the same lookahead and predraft for its draft stack; the buffer-copy draft
   # attention keeps the queued draft off the concat Synapse rejects (section 25)
   VLLM_HPU_DSPINE_LOOKAHEAD="$DSPINE" VLLM_HPU_DSPINE_PREDRAFT="$DSPINE" VLLM_HPU_PAST_CONCAT_COPY="$DSPINE"
+  # DSpine block (section 26): WY GDN verify kernel, fused speculative conv, constant M-RoPE masks, index_select
+  # conv history; long contexts verify 8 tokens with their own compiled layer groups
+  FLASHINFER_GAUDI_MTP_WY="$DSPINE" VLLM_HPU_SPEC_CONV_TPC="$DSPINE" VLLM_HPU_MROPE_CONST_MASKS="$DSPINE"
+  VLLM_HPU_CONV_HISTORY_INDEX_SELECT="$DSPINE"
+  VLLM_HPU_DSPINE_DYNAMIC_WIDTH="$DSPINE_DYNAMIC_WIDTH_TOKENS" VLLM_HPU_DSPINE_WIDTH_GROUPS="$DSPINE"
   VLLM_HPU_DFLASH2_CPU_INPUTS=1 VLLM_HPU_DFLASH2_CONTEXT_REGION=1
   VLLM_HPU_DFLASH2_DECODE_CONTROL="$RUN/decode-control.json"
   VLLM_HPU_DFLASH2_HOST_OPT=1 VLLM_HPU_DFLASH2_HOST_OPT_CONTROL="$RUN/host-control.json"

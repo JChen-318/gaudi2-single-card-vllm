@@ -1,6 +1,7 @@
 from typing import Optional
 
 import torch
+_MROPE_CONST_MASKS = __import__("os").environ.get("VLLM_HPU_MROPE_CONST_MASKS", "0") == "1"
 import math
 from vllm.model_executor.layers.rotary_embedding import (RotaryEmbedding, Phi3LongRoPEScaledRotaryEmbedding,
                                                          Llama4VisionRotaryEmbedding, Llama3RotaryEmbedding,
@@ -627,6 +628,15 @@ class HPULlama4VisionRotaryEmbedding(Llama4VisionRotaryEmbedding):
 @MRotaryEmbedding.register_oot
 class HPUMRotaryEmbedding(MRotaryEmbedding):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if _MROPE_CONST_MASKS and getattr(self, "mrope_interleaved", False) and self.mrope_section:
+            # apply_interleaved_rope's channel masks, built once (VLLM_HPU_MROPE_CONST_MASKS=1)
+            ch = torch.arange(self.cos_sin_cache.shape[-1] // 2)
+            sec = self.mrope_section
+            self.register_buffer("_hpu_mrope_h", (ch % 3 == 1) & (ch < sec[1] * 3), persistent=False)
+            self.register_buffer("_hpu_mrope_w", (ch % 3 == 2) & (ch < sec[2] * 3), persistent=False)
+
     def prepare_cos_sin(self,
                         positions: torch.Tensor,
                         offsets: Optional[torch.Tensor] = None,
@@ -669,7 +679,11 @@ class HPUMRotaryEmbedding(MRotaryEmbedding):
         cos, sin = cos_sin.chunk(2, dim=-1)
         if positions.ndim == 2:
             assert self.mrope_section
-            if getattr(self, "mrope_interleaved", False):
+            if getattr(self, "mrope_interleaved", False) and hasattr(self, "_hpu_mrope_h"):
+                is_height, is_width = self._hpu_mrope_h, self._hpu_mrope_w
+                cos = torch.where(is_width, cos[2], torch.where(is_height, cos[1], cos[0]))
+                sin = torch.where(is_width, sin[2], torch.where(is_height, sin[1], sin[0]))
+            elif getattr(self, "mrope_interleaved", False):
                 from vllm.model_executor.layers.rotary_embedding.mrope import apply_interleaved_rope
 
                 cos = apply_interleaved_rope(cos, self.mrope_section)

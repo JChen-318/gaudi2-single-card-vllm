@@ -7446,6 +7446,16 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 if predraft_warmup_sampled is not None and num_prefills == 0 and num_decodes:
                     self._warmup_dflash2_predraft(decode_data, non_flattened_hidden_states, aux_hidden_states,
                                                   predraft_warmup_sampled, num_decodes)
+                if (num_decodes > 0 and self._draft_token_ids is not None and not warmup_mode
+                        and os.environ.get("VLLM_HPU_DSPINE_DYNAMIC_WIDTH", "0") not in ("", "0")):
+                    # DSPINE_DYNAMIC_WIDTH: long contexts verify fewer drafts (same rule as stage())
+                    _ctx = max(int(self.input_batch.num_tokens_no_spec[r]) - 1 for r in range(num_decodes))
+                    _keep = self._dspine_round_width(_ctx) - 1
+                    _d = self._draft_token_ids
+                    if isinstance(_d, torch.Tensor) and _d.dim() == 2 and _d.shape[1] > _keep:
+                        self._draft_token_ids = _d[:, :_keep].contiguous()
+                    elif isinstance(_d, list) and _d and isinstance(_d[0], list) and len(_d[0]) > _keep:
+                        self._draft_token_ids = [row[:_keep] for row in _d]
                 if self._step_timer is not None and not warmup_mode:
                     self._step_timer.mark("D")
                 if self._dflash_lookahead is not None and self._v6_control.active["lookahead"]:
@@ -7674,6 +7684,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                 logger.info("Wrapping in HPUGraph took %.4f GB", self.model_memory_usage / float(2**30))
         #############################################
 
+        if os.environ.get("VLLM_HPU_DRAFT_FP8", "0") == "1" and hasattr(self, "drafter"):
+            from vllm_gaudi.ops.hpu_draft_fp8 import install as install_fp8_draft
+            install_fp8_draft(getattr(self.drafter, "model", None))
+            torch.hpu.synchronize()
         if gaudi_envs.VLLM_HPU_LM_HEAD_FP8:
             from vllm_gaudi.ops.hpu_lm_head_fp8 import install as install_fp8_lm_head
             install_fp8_lm_head(self.model, getattr(getattr(self, "drafter", None), "model", None))
@@ -7847,6 +7861,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                     setattr_nested(model, method_name, self._compile_spec_tensor_region(method))
                 elif (method_name in ('compute_candidates', 'select_dflash2_candidates')
                       and hasattr(getattr(model, 'model', None), 'select_dspine_candidates')):
+                    setattr_nested(model, method_name, self._compile(method, static_shapes=True))
+                elif (method_name in ('select_and_store_dflash2_context', 'predraft_prepare')
+                      and os.environ.get('VLLM_HPU_STATIC_DRAFT_REGIONS', '0') not in ('', '0')):
+                    # STATIC_DRAFT_REGIONS: decode-only drafter regions, one static graph per round width
                     setattr_nested(model, method_name, self._compile(method, static_shapes=True))
                 else:
                     self._compile_region(model, method_name, method)
@@ -8549,6 +8567,14 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             gc.collect()
         return total_mem, total_batch_seq, captured_all
 
+    def _dspine_round_width(self, context_tokens: int) -> int:
+        """VLLM_HPU_DSPINE_DYNAMIC_WIDTH: verification width (1 + drafts) of a decode round at this context."""
+        full = self.speculative_config.num_speculative_tokens + 1
+        threshold = int(os.environ.get("VLLM_HPU_DSPINE_DYNAMIC_WIDTH", "0") or 0)
+        if threshold <= 0 or full <= 8 or not self._uses_speculative_gdn_checkpoints:
+            return full
+        return 8 if context_tokens >= threshold else full
+
     def _warmup_tail_tokens(self):
         lookahead = self.vllm_config.num_lookahead_tokens
         if self._is_qwen_mtp:
@@ -8721,6 +8747,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                                             is_prompt=True)
         if decode_cfg:
             decode_bs, decode_query_len, decode_num_blocks = decode_cfg
+            self._warmup_decode_blocks = decode_num_blocks
             # Use attn_block_size (the actual kernel block granularity used in
             # _create_decode_input_data) rather than block_size (the KV-manager
             # page size).  For hybrid models these differ after
@@ -8792,6 +8819,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             # exercises the same target verification graph.
             self._draft_token_ids = None
             draft_tokens = [0] * self.speculative_config.num_speculative_tokens
+            _blocks = getattr(self, "_warmup_decode_blocks", None)
+            if _blocks is not None and os.environ.get("VLLM_HPU_DSPINE_DYNAMIC_WIDTH", "0") not in ("", "0"):
+                # DSPINE_DYNAMIC_WIDTH: a bucket above the threshold runs 8-wide rounds
+                draft_tokens = [0] * (self._dspine_round_width(_blocks * self.attn_block_size - 1) - 1)
             verify_req_ids = [req.req_id for req in requests if self.requests[req.req_id].output_token_ids]
             if verify_req_ids:
                 verify_scheduled_tokens = {req_id: 1 + len(draft_tokens) for req_id in verify_req_ids}
@@ -10594,14 +10625,16 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         """Compile the pre-draft regions for this decode bucket during warmup (best effort)."""
         try:
             width = self.drafter.num_query_per_req
+            if isinstance(sampled_token_ids, torch.Tensor) and sampled_token_ids.dim() == 2:
+                width = int(sampled_token_ids.shape[1])  # PREDRAFT_WARMUP_WIDTH
             starts = [int(self.input_batch.num_computed_tokens_cpu[row]) for row in range(num_decodes)]
-            plan = self._dflash2_predraft_plan(starts, decode_data.token_ids.shape[0] // width)
+            plan = self._dflash2_predraft_plan(starts, decode_data.token_ids.shape[0] // width, width)
             if plan is not None:
                 self._dflash2_predraft(decode_data, (hidden_states, aux_hidden_states), sampled_token_ids, starts, plan)
         except Exception as exc:  # noqa: BLE001 - warmup must not fail on an optional path
             logger.warning("Pre-draft warmup skipped for %d decodes: %s", num_decodes, exc)
 
-    def _dflash2_predraft_plan(self, starts, padded: int):
+    def _dflash2_predraft_plan(self, starts, padded: int, target_width: int | None = None):
         """Host inputs ``(meta, max_context_blocks)`` of a pre-draft for rows with these
         predicted computed lengths, or None when the pre-draft does not apply."""
         from vllm_gaudi.v1.spec_decode.dflash_cpu_inputs import bucket_context_blocks
@@ -10621,7 +10654,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         blocks_per_row = getattr(table, 'num_blocks_per_row', None)
         if blocks_per_row is None:
             return None
-        width = drafter.num_query_per_req
+        width = drafter.num_query_per_req if target_width is None else int(target_width)  # PREDRAFT_TARGET_WIDTH
         block_size = drafter.block_size
         for row, start in enumerate(starts):
             # Context writes reach the last verified position of the predicted round.
@@ -10642,7 +10675,11 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
         drafts ``[len(starts), K]`` on the device, or None when not applicable.
         """
         drafter = self.drafter
-        width = drafter.num_query_per_req
+        query_width = drafter.num_query_per_req
+        # PREDRAFT_TARGET_WIDTH: the verified round may be narrower than the drafter's query block
+        # (DSPINE_DYNAMIC_WIDTH); the rejection output's width is the round's width.
+        width = (int(sampled_token_ids.shape[1]) if isinstance(sampled_token_ids, torch.Tensor)
+                 and sampled_token_ids.dim() == 2 else query_width)
         if plan is None or decode_data.token_ids is None or decode_data.token_ids.shape[0] % width:
             return None
         padded = decode_data.token_ids.shape[0] // width
@@ -10661,7 +10698,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
             aux_hidden_states,
             hidden_states,
             block_size=block_size,
-            num_query_per_req=width,
+            num_query_per_req=query_width,
             mask_token_id=drafter.mask_token_id,
             pad_block_id=int(self._PAD_BLOCK_ID),
             pad_slot_id=int(self._PAD_SLOT_ID),
@@ -10878,6 +10915,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
                     [position for positions in context_positions_by_row for position in positions],
                     context_slots,
                 )
+        if os.environ.get("VLLM_HPU_DSPINE_DYNWIDTH_DEBUG"):
+            logger.warning("DYNWIDTH propose: token_ids %s num_draft %s target_width %d active %s sampled %s",
+                           tuple(decode_data.token_ids.shape), list(metadata.num_draft_tokens) if metadata is not None else None,
+                           target_width, active_rows, [len(sampled_token_ids[r]) for r in active_rows])
         drafts = self.drafter.propose_query_block(
             bonus_token_ids,
             query_starts,

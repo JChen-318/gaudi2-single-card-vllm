@@ -190,6 +190,10 @@ class DFlashLookahead:
         self._profile_path = profile_path
         self._profiler = None
         self._staged = None
+        # VLLM_HPU_DFLASH2_PREBUILD: next-round inputs for every accepted count, built during the readback wait.
+        import os as _os
+        self._prebuild = _os.environ.get("VLLM_HPU_DFLASH2_PREBUILD", "0") == "1"
+        self._prebuilt = None
 
     def _mark(self, kind: str) -> None:
         timer = self.runner._step_timer
@@ -210,6 +214,19 @@ class DFlashLookahead:
         return drafts
 
     def _export_drafts(self, drafts: torch.Tensor) -> None:
+        if __import__("os").environ.get("VLLM_HPU_DSPINE_EXPORT_DEFAULT_STREAM", "0") == "1":
+            key = ("drafts", tuple(drafts.shape), drafts.dtype)
+            buffers = self._sampled_buffers.get(key)
+            if buffers is None:
+                buffers = [torch.empty(drafts.shape, dtype=drafts.dtype, pin_memory=True) for _ in range(2)]
+                self._sampled_buffers[key] = buffers
+            self._drafts_flip = getattr(self, "_drafts_flip", 0) ^ 1
+            host = buffers[self._drafts_flip]
+            host.copy_(drafts, non_blocking=True)
+            event = torch.hpu.Event()
+            event.record()
+            self._drafts_cpu, self._drafts_event = host, event
+            return
         if self._copy_stream is None:
             self._copy_stream = torch.hpu.Stream()
         event = torch.hpu.Event()
@@ -242,6 +259,13 @@ class DFlashLookahead:
         if ready is None or self.early_readback_left is None:
             return None
         host, event = ready
+        if self._prebuild:
+            try:
+                self._prebuild_candidates()
+            except Exception as exc:  # noqa: BLE001 - an optimisation only: fall back to the normal build
+                self._prebuild = False
+                self._prebuilt = None
+                logger.error("DFlash2 prebuild failed (%s: %s); disabled", type(exc).__name__, exc)
         event.synchronize()
         self._mark("W")
         if self.early_readback_left > 0:
@@ -254,6 +278,64 @@ class DFlashLookahead:
                 logger.info("DFlash2 early readback verified")
         self.stats["early_readback"] += 1
         return host
+
+    def _prebuild_candidates(self) -> None:
+        """Delta-build round N+1 for each accepted count 1..width before the readback wait returns.
+        Single request only; skipped when the K/V mirror is in use (its plan() refreshes mirror pages)."""
+        self._prebuilt = None
+        runner = self.runner
+        delta = self.delta
+        if (delta is None or delta.prev is None or not runner._v6_control.active.get("delta", True)
+                or not runner._v6_control.active.get("lookahead", True)):
+            return
+        prev = delta.prev
+        req_ids, width = prev["req_ids"], prev["width"]
+        batch = runner.input_batch
+        if len(req_ids) != 1 or batch.num_reqs != 1 or list(batch.req_ids[:1]) != req_ids:
+            return
+        if getattr(prev["decode_data"].attn_metadata, "kv_mirror_tail", None) is not None:
+            return
+        req_id = req_ids[0]
+        base = int(batch.num_computed_tokens_cpu[0])
+        accepted = runner._gdn_num_accepted_by_req
+        had, old = req_id in accepted, accepted.get(req_id)
+        delta_count = delta.stats.get("delta", 0)
+        built = {}
+        try:
+            for n in range(1, width + 1):
+                accepted[req_id] = n
+                data = delta.build(req_ids, [base + n], [0], width)
+                if data is None or getattr(data.attn_metadata, "kv_mirror_tail", None) is not None:
+                    continue
+                built[n] = data
+        finally:
+            if had:
+                accepted[req_id] = old
+            else:
+                accepted.pop(req_id, None)
+            delta.stats["delta"] = delta_count
+        self._prebuilt = (tuple(req_ids), base, width, built)
+
+    def _take_prebuilt(self, req_list, starts, last_tokens, width):
+        prebuilt, self._prebuilt = self._prebuilt, None
+        if prebuilt is None:
+            return None
+        req_key, base, built_width, built = prebuilt
+        if req_key != tuple(req_list) or built_width != width or len(req_list) != 1:
+            return None
+        data = built.get(int(starts[0]) - base)
+        if data is None:
+            return None
+        import numpy as np
+        from dataclasses import replace
+
+        from vllm_gaudi.utils import async_h2d_copy
+        tokens = np.zeros(width, dtype=np.int64)
+        tokens[0] = int(last_tokens[0])
+        token_ids = torch.from_numpy(tokens).to(data.token_ids.dtype).reshape(data.token_ids.shape)
+        self.delta.stats["delta"] += 1
+        self.stats["prebuilt"] = self.stats.get("prebuilt", 0) + 1
+        return replace(data, token_ids=async_h2d_copy(token_ids, device=self.runner.device))
 
     def _prepare(self, predicted, count: int):
         runner = self.runner
@@ -309,6 +391,12 @@ class DFlashLookahead:
             return None
         num_spec = runner.speculative_config.num_speculative_tokens
         width = num_spec + 1
+        if __import__("os").environ.get("VLLM_HPU_DSPINE_DYNAMIC_WIDTH", "0") not in ("", "0"):
+            # DSPINE_DYNAMIC_WIDTH: predict the next round at the width the runner will verify with
+            _ctx = max((int(batch.num_computed_tokens_cpu[r]) + len(sampled[r]) for r in range(num_decodes)
+                        if r < len(sampled) and sampled[r]), default=0)
+            width = runner._dspine_round_width(_ctx)
+            num_spec = width - 1
         defragmenter = getattr(runner, "defragmenter", None)
         if defragmenter is not None and getattr(defragmenter, "enabled", False):
             return
@@ -346,7 +434,10 @@ class DFlashLookahead:
         req_list = list(rows)
         starts = [computed[req_id] for req_id in req_list]
         delta = self.delta if self.delta is not None and runner._v6_control.active.get("delta", True) else None
-        decode_data = delta.build(req_list, starts, [last[req_id] for req_id in req_list], width) if delta else None
+        last_tokens = [last[req_id] for req_id in req_list]
+        decode_data = self._take_prebuilt(req_list, starts, last_tokens, width) if delta and self._prebuild else None
+        if decode_data is None:
+            decode_data = delta.build(req_list, starts, last_tokens, width) if delta else None
         if decode_data is None or delta.verify_left > 0:
             full = self._full_prepare(rows, computed, sampled, num_spec, width, num_decodes)
             if decode_data is None:
@@ -389,7 +480,7 @@ class DFlashLookahead:
         control = runner._v6_control.active
         presample = (self.presample and control.get("presample", True) and decode_data.spec_decode_metadata is not None)
         starts = [computed[req_id] for req_id in rows]
-        plan = (runner._dflash2_predraft_plan(starts, padded)
+        plan = (runner._dflash2_predraft_plan(starts, padded, width)  # PREDRAFT_TARGET_WIDTH
                 if presample and not self.predraft_disabled and control.get("predraft", True) else None)
         guard_skip = getattr(runner, "_guard_skip", None) if control.get("guard_skip", True) else None
         key = None
@@ -401,6 +492,7 @@ class DFlashLookahead:
                    batch.all_greedy, batch.all_random, batch.no_top_k, batch.no_top_p, fast_topk_topp.is_active())
         predraft = None
         with guard_skip.round(key) if guard_skip is not None else contextlib.nullcontext():
+            self._mark("L")
             outputs = runner._execute_model_generic(decode_data.token_ids,
                                                     decode_data.position_ids,
                                                     decode_data.attn_metadata,

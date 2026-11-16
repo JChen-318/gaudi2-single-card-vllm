@@ -41,8 +41,9 @@ The safetensors SHA-256 is
 Use `NUM_SPECULATIVE_TOKENS=15` for the trained 16-token block, or `7` for
 an 8-token prefix. The draft always uses BF16 independently of the target's
 FP16/BF16 activation dtype; `DTYPE=auto` preserves the existing target choice.
-Both require TP=PP=DP=1, text-only serving,
-prefix caching disabled, and at most 8 concurrent sequences. Other draft/target
+Both require TP=PP=DP=1 and at most 8 concurrent sequences. Prefix caching
+works (a 14.8K-token repeat goes from 2.7 s to 0.3 s TTFT with unchanged
+acceptance); production runs it together with vision input. Other draft/target
 shapes are rejected. The existing DFlash2 configuration remains the default.
 The example uses `SPEC_FAST_PATHS=1` to enable supported sampling and host
 shortcuts. Set it to `0` to disable the runtime shortcuts for diagnosis.
@@ -77,9 +78,14 @@ on English prose, where its accepted length varies most between runs. Accepted
 length moves 5-10% from run to run, so a single run of either draft does not
 settle a difference of that size.
 
-The native GDN verify kernel is specialized for 8-token blocks. A full
-16-token verification composes two functional 8-token kernel calls: the second
-starts from the first call's final state, and all 16 checkpoints are retained.
+With `DSPINE=1` the GDN verification runs the WY-form kernel
+(`FLASHINFER_GAUDI_MTP_WY=1`, `gdn_mtp_wy_f32_gaudi2.c`): the dot products of the
+state with all 16 keys and queries become two FP32 batched matmuls on the MME
+(true FP32 on Gaudi2, 1.4e-7 from the reference) and the TPC kernel keeps only
+the WY-form updates, 4.23 to 2.66 ms per round for all 48 GDN layers. Without
+it, a 16-token verification composes two functional 8-token kernel calls: the
+second starts from the first call's final state, and all 16 checkpoints are
+retained.
 The accepted checkpoint is selected from the entire previous block before any
 writeback. Other shapes keep the general checkpoint path. A higher draft
 acceptance length does not by itself establish a throughput improvement;
@@ -100,6 +106,45 @@ The DSpine stack and candidate regions use static compilation per bucket.
 Packed proposal features and anchor IDs are made contiguous before entering
 the candidate region; this avoids passing sliced full-block storage to the
 HPU reshape lowering when the active batch changes.
+
+## Block-16 kernels and long contexts
+
+`DSPINE=1` also turns on (section 26 of [the optimization notes](OPTIMIZATION.md)):
+
+- `VLLM_HPU_SPEC_CONV_TPC=1`: one TPC launch per GDN layer for the speculative
+  causal conv (history rows at the accepted offset, four taps, SiLU and the 18
+  new state rows; `spec_conv_bf16_gaudi2.c`). The new state is bit-identical,
+  the output within one BF16 ulp of the PyTorch path.
+- `VLLM_HPU_MROPE_CONST_MASKS=1` and `VLLM_HPU_CONV_HISTORY_INDEX_SELECT=1`:
+  constant interleaved M-RoPE channel masks and a flat `index_select` for the
+  conv history, both bit-identical on CPU.
+- `VLLM_HPU_DSPINE_DYNAMIC_WIDTH=<tokens>` (serve.sh `DSPINE_DYNAMIC_WIDTH`,
+  default 32768, 0 off): from that context length on, a round verifies 8 tokens
+  (the first 7 drafts) instead of 16. At long contexts the second half of the
+  block costs more than it returns: at 100K a sampled 16-wide round took 36.6 ms
+  for 4.19 tokens, an 8-wide one 31.9 ms for 4.39. The host lookahead,
+  pre-draft bridge and warm-up follow the round width.
+- `VLLM_HPU_DSPINE_WIDTH_GROUPS=1`: the 8-wide single-request rounds run a second
+  set of compiled layer groups with their own code objects. A compiled region
+  that sees 16 and then 8 tokens has its token dimension marked dynamic by
+  Dynamo, and those graphs then execute op by op on the host (37.9 instead of
+  31.2 ms per round at 100K). Compiling everything statically
+  (`VLLM_T_COMPILE_DYNAMIC_SHAPES=0`) avoids that too, but then every decode
+  bucket of every layer group compiles separately and a full warm-up takes
+  hours. With `MAX_NUM_SEQS=2`, an 8-wide round of two requests also has 16 rows,
+  so the second set is used for single requests only; batched 8-wide rounds stay
+  on the first set.
+
+Production (full warm-up 34 min, prefix caching and vision on, sampled
+requests at temperature 1, ms per round from `warm_prod`):
+
+| context | 48K | 80K | 112K | 160K | 192K | 240K |
+|---|---|---|---|---|---|---|
+| fixed 16-token block | 34.0 | 34.4 | 37.2 | 42.2 | 43.4 | 47.1 |
+| dynamic width + width groups | 30.1 | 32.1 | 33.3 | 35.6 | 36.5 | 39.3 |
+
+The short-prompt benchmark is unchanged (harmonic mean 188.1 against 187.7
+tok/s); 100K needle retrieval and multi-turn prefix consistency pass.
 
 ## Validation
 

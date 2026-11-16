@@ -17,6 +17,8 @@ constexpr const char* kMtpPreparedSchema = "custom_op::flashinfer_gaudi_gdn_mtp_
 constexpr const char* kMtpPreparedGuid = "flashinfer_gaudi_gdn_mtp_prepared_f32_gaudi2";
 constexpr const char* kMtpFusedSchema = "custom_op::flashinfer_gaudi_gdn_mtp_fused";
 constexpr const char* kMtpFusedGuid = "flashinfer_gaudi_gdn_mtp_fused_f32_gaudi2";
+constexpr const char* kMtpWySchema = "custom_op::flashinfer_gaudi_gdn_mtp_wy";
+constexpr const char* kMtpWyGuid = "flashinfer_gaudi_gdn_mtp_wy_f32_gaudi2";
 constexpr const char* kSelectPathSchema = "flashinfer_gaudi::dflash2_select_path";
 constexpr const char* kSelectPathGuid = "flashinfer_gaudi_dflash2_select_path_i32_f32_gaudi2";
 constexpr const char* kScoreSelectSchema = "flashinfer_gaudi::dflash2_score_select";
@@ -107,6 +109,24 @@ bool register_gdn_mtp_fused() {
 }
 
 const bool kMtpFusedRegistered = register_gdn_mtp_fused();
+
+bool register_gdn_mtp_wy() {
+  auto output_meta = [](const at::Stack& inputs) {
+    const auto& source = inputs.at(0).toTensor();
+    const auto& kvals = inputs.at(1).toTensor();
+    habana::PartialOutputMetaData output;
+    output.dtype = at::ScalarType::Float;
+    output.shape = {kvals.size(0), kvals.size(1), source.size(1), source.size(2)};
+    habana::PartialOutputMetaData checkpoints;
+    checkpoints.dtype = at::ScalarType::Float;
+    checkpoints.shape = {kvals.size(0), kvals.size(1), source.size(1), source.size(2), source.size(3)};
+    return habana::PartialOutputMetaDataVector{output, checkpoints};
+  };
+  habana::custom_op::registerUserCustomOp(kMtpWySchema, kMtpWyGuid, output_meta, nullptr);
+  return true;
+}
+
+const bool kMtpWyRegistered = register_gdn_mtp_wy();
 
 bool register_dflash2_select_path() {
   auto output_meta = [](const at::Stack& inputs) {
@@ -321,13 +341,15 @@ void check_gdn_mtp_fused_inputs(
   TORCH_CHECK(num_accepted.scalar_type() == at::ScalarType::Int);
   TORCH_CHECK(state_pool.dim() == 4 && state_pool.size(0) > 0 && state_pool.size(1) == kMtpValueHeads &&
               state_pool.size(2) == kMtpDim && state_pool.size(3) == kMtpDim);
-  TORCH_CHECK(packed_qkv.dim() == 3 && packed_qkv.size(1) == kMtpTokens &&
+  // T=8 (DFlash2) or T=16 (DSpine verification); the kernel library has one ELF per token count.
+  TORCH_CHECK(packed_qkv.dim() == 3 && (packed_qkv.size(1) == kMtpTokens || packed_qkv.size(1) == 2 * kMtpTokens) &&
               packed_qkv.size(2) == kMtpPackedWidth);
   const auto batch = packed_qkv.size(0);
+  const auto tokens = packed_qkv.size(1);
   TORCH_CHECK(batch > 0 && batch <= kMtpMaxBatch);
-  TORCH_CHECK(log_decay.sizes() == at::IntArrayRef({batch, kMtpTokens, kMtpValueHeads}));
+  TORCH_CHECK(log_decay.sizes() == at::IntArrayRef({batch, tokens, kMtpValueHeads}));
   TORCH_CHECK(beta.sizes() == log_decay.sizes());
-  TORCH_CHECK(state_indices.sizes() == at::IntArrayRef({batch, kMtpTokens}));
+  TORCH_CHECK(state_indices.sizes() == at::IntArrayRef({batch, tokens}));
   TORCH_CHECK(num_accepted.dim() == 1 && num_accepted.size(0) == batch);
   TORCH_CHECK(state_pool.is_contiguous() && packed_qkv.is_contiguous() && log_decay.is_contiguous() &&
               beta.is_contiguous() && state_indices.is_contiguous() && num_accepted.is_contiguous());
@@ -358,10 +380,55 @@ std::tuple<at::Tensor, at::Tensor> gdn_mtp_fused_meta(
     const at::Tensor& num_accepted) {
   check_gdn_mtp_fused_inputs(state_pool, packed_qkv, log_decay, beta, state_indices, num_accepted);
   const auto batch = packed_qkv.size(0);
+  const auto tokens = packed_qkv.size(1);
   auto options = state_pool.options();
   return {
-      at::empty({batch, kMtpTokens, kMtpValueHeads, kMtpDim}, options),
-      at::empty({batch, kMtpTokens, kMtpValueHeads, kMtpDim, kMtpDim}, options)};
+      at::empty({batch, tokens, kMtpValueHeads, kMtpDim}, options),
+      at::empty({batch, tokens, kMtpValueHeads, kMtpDim, kMtpDim}, options)};
+}
+
+void check_gdn_mtp_wy_inputs(
+    const at::Tensor& source, const at::Tensor& kvals, const at::Tensor& log_decay, const at::Tensor& beta,
+    const at::Tensor& rmat, const at::Tensor& gram, const at::Tensor& vals) {
+  TORCH_CHECK(source.scalar_type() == at::ScalarType::Float && kvals.scalar_type() == at::ScalarType::Float);
+  TORCH_CHECK(log_decay.scalar_type() == at::ScalarType::Float && beta.scalar_type() == at::ScalarType::BFloat16);
+  TORCH_CHECK(rmat.scalar_type() == at::ScalarType::Float && gram.scalar_type() == at::ScalarType::Float &&
+              vals.scalar_type() == at::ScalarType::Float);
+  TORCH_CHECK(kvals.dim() == 4 && (kvals.size(1) == kMtpTokens || kvals.size(1) == 2 * kMtpTokens) &&
+              kvals.size(2) == kMtpKeyHeads && kvals.size(3) == kMtpDim);
+  const auto batch = kvals.size(0);
+  const auto tokens = kvals.size(1);
+  TORCH_CHECK(batch > 0 && batch <= kMtpMaxBatch);
+  TORCH_CHECK(source.sizes() == at::IntArrayRef({batch, kMtpValueHeads, kMtpDim, kMtpDim}));
+  TORCH_CHECK(log_decay.sizes() == at::IntArrayRef({batch, tokens, kMtpValueHeads}) && beta.sizes() == log_decay.sizes());
+  TORCH_CHECK(rmat.sizes() == at::IntArrayRef({batch, kMtpValueHeads, 2 * tokens, kMtpDim}));
+  TORCH_CHECK(gram.sizes() == at::IntArrayRef({batch, kMtpKeyHeads, 2 * tokens, 2 * tokens}));
+  TORCH_CHECK(vals.sizes() == at::IntArrayRef({batch, tokens, kMtpValueHeads, kMtpDim}));
+  TORCH_CHECK(source.is_contiguous() && kvals.is_contiguous() && log_decay.is_contiguous() &&
+              beta.is_contiguous() && rmat.is_contiguous() && gram.is_contiguous() && vals.is_contiguous());
+}
+
+std::tuple<at::Tensor, at::Tensor> gdn_mtp_wy_hpu(
+    const at::Tensor& source, const at::Tensor& kvals, const at::Tensor& log_decay, const at::Tensor& beta,
+    const at::Tensor& rmat, const at::Tensor& gram, const at::Tensor& vals) {
+  check_gdn_mtp_wy_inputs(source, kvals, log_decay, beta, rmat, gram, vals);
+  TORCH_CHECK(kMtpWyRegistered);
+  auto descriptor = habana::custom_op::UserCustomOpDescriptor::getUserCustomOpDescriptor(kMtpWySchema);
+  std::vector<c10::IValue> inputs{source, kvals, log_decay, beta, rmat, gram, vals};
+  auto outputs = descriptor.execute(inputs);
+  TORCH_CHECK(outputs.size() == 2);
+  return {outputs.at(0), outputs.at(1)};
+}
+
+std::tuple<at::Tensor, at::Tensor> gdn_mtp_wy_meta(
+    const at::Tensor& source, const at::Tensor& kvals, const at::Tensor& log_decay, const at::Tensor& beta,
+    const at::Tensor& rmat, const at::Tensor& gram, const at::Tensor& vals) {
+  check_gdn_mtp_wy_inputs(source, kvals, log_decay, beta, rmat, gram, vals);
+  const auto batch = kvals.size(0);
+  const auto tokens = kvals.size(1);
+  auto options = source.options();
+  return {at::empty({batch, tokens, kMtpValueHeads, kMtpDim}, options),
+          at::empty({batch, tokens, kMtpValueHeads, kMtpDim, kMtpDim}, options)};
 }
 
 at::Tensor dflash2_select_path_hpu(
@@ -515,14 +582,19 @@ TORCH_LIBRARY_FRAGMENT(custom_op, m) {
   m.def(
       "flashinfer_gaudi_gdn_mtp_fused(Tensor state_pool, Tensor packed_qkv, Tensor log_decay, "
       "Tensor beta, Tensor state_indices, Tensor num_accepted) -> (Tensor, Tensor)");
+  m.def(
+      "flashinfer_gaudi_gdn_mtp_wy(Tensor source, Tensor kvals, Tensor log_decay, Tensor beta, "
+      "Tensor rmat, Tensor gram, Tensor vals) -> (Tensor, Tensor)");
 }
 
 TORCH_LIBRARY_IMPL(custom_op, HPU, m) {
   m.impl("flashinfer_gaudi_gdn_mtp_prepared", gdn_mtp_prepared_hpu);
   m.impl("flashinfer_gaudi_gdn_mtp_fused", gdn_mtp_fused_hpu);
+  m.impl("flashinfer_gaudi_gdn_mtp_wy", gdn_mtp_wy_hpu);
 }
 
 TORCH_LIBRARY_IMPL(custom_op, Meta, m) {
   m.impl("flashinfer_gaudi_gdn_mtp_prepared", gdn_mtp_prepared_meta);
   m.impl("flashinfer_gaudi_gdn_mtp_fused", gdn_mtp_fused_meta);
+  m.impl("flashinfer_gaudi_gdn_mtp_wy", gdn_mtp_wy_meta);
 }
