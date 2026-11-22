@@ -7,10 +7,18 @@
 [![Hardware: Intel Gaudi2](https://img.shields.io/badge/Intel_Gaudi2-96_GiB_HBM-0071C5?style=flat-square)](#quick-start)
 [![Gaudi SDK: 1.24.1](https://img.shields.io/badge/Gaudi_SDK-1.24.1-4B5563?style=flat-square)](#requirements)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-3FB950?style=flat-square)](LICENSE)
+[![Status: Discontinued](https://img.shields.io/badge/Status-Discontinued-D73A4A?style=flat-square)](https://github.com/JChen-318/GaudiInfer)
 
 [Benchmarks](#benchmarks) · [Image & video](#image-and-video-generation-vllm-omni) · [Quick start](#quick-start) · [API](#api) · [Documentation](#documentation) · [Limitations](#limitations)
 
 </div>
+
+> [!WARNING]
+> **Discontinued / 停止维护公告**
+>
+> This repository is **no longer maintained or supported**. All future development and updates have moved exclusively to **[GaudiInfer](https://github.com/JChen-318/GaudiInfer)** (native C++ on Intel Gaudi2: Qwen3.8-27B FP8 + DSpine, Qwen-Image-2.1-Turbo, MiniMax-H3-Image, MiniMax-H3 Video & Audio, and the unified Studio & Monitor WebUI).
+>
+> 本仓库已**停止支持与更新**，后续所有开发与更新均仅在 **[GaudiInfer](https://github.com/JChen-318/GaudiInfer)** 仓库进行。
 
 <p align="center">
   <img src="docs/assets/inference-path.svg" width="100%" alt="Single-card inference: a DFlash2 FP16 draft model proposes candidates, Qwen3.8-27B FP8 verifies them, and stochastic sampling produces the output. MTP layers are not required in the target checkpoint.">
